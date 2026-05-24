@@ -35,7 +35,7 @@ DISCOVERY_PREFIX = OPTIONS.get("discovery_prefix", "pentair_pump")
 ENABLE_DISCOVERY = bool(OPTIONS.get("enable_discovery", True))
 
 CTRL_ADDR = int(OPTIONS.get("ctrl_addr", 33))
-PUMP_ADDR = int(OPTIONS.get("pump_addr", 96"))
+PUMP_ADDR = int(OPTIONS.get("pump_addr", 96))
 
 LOW_RPM = int(OPTIONS.get("low_rpm", 1650))
 HIGH_RPM = int(OPTIONS.get("high_rpm", 3000))
