@@ -1,30 +1,45 @@
 import json
-import os
+import logging
 import threading
 import time
+
 import paho.mqtt.client as mqtt
 
 
-BROKER = os.getenv("BROKER", "")
-PORT = int(os.getenv("PORT", "1883"))
-USERNAME = os.getenv("USERNAME", "")
-PASSWORD = os.getenv("PASSWORD", "")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [pentair_bridge] %(message)s",
+)
+logger = logging.getLogger("pentair_bridge")
 
-TOPIC_UP = os.getenv("TOPIC_UP", "D4AD20CF144A/up")
-TOPIC_DOWN = os.getenv("TOPIC_DOWN", "D4AD20CF144A/down")
 
-PARSED_BASE = os.getenv("PARSED_BASE", "pentair/pump/status")
-CMD_BASE = os.getenv("CMD_BASE", "pentair/pump/cmd")
-DISCOVERY_BASE = os.getenv("DISCOVERY_BASE", "homeassistant")
-DISCOVERY_PREFIX = os.getenv("DISCOVERY_PREFIX", "pentair_pump")
-ENABLE_DISCOVERY = os.getenv("ENABLE_DISCOVERY", "true").lower() == "true"
+def load_options():
+    with open("/data/options.json", "r", encoding="utf-8") as f:
+        return json.load(f)
 
-CTRL_ADDR = int(os.getenv("CTRL_ADDR", "33"))
-PUMP_ADDR = int(os.getenv("PUMP_ADDR", "96"))
 
-LOW_RPM = int(os.getenv("LOW_RPM", "1600"))
-HIGH_RPM = int(os.getenv("HIGH_RPM", "3450"))
-STATUS_POLL_INTERVAL = int(os.getenv("STATUS_POLL_INTERVAL", "15"))
+OPTIONS = load_options()
+
+BROKER = OPTIONS.get("broker", "")
+PORT = int(OPTIONS.get("port", 1883))
+USERNAME = OPTIONS.get("username", "")
+PASSWORD = OPTIONS.get("password", "")
+
+TOPIC_UP = OPTIONS.get("topic_up", "D4AD20CF144A/up")
+TOPIC_DOWN = OPTIONS.get("topic_down", "D4AD20CF144A/down")
+
+PARSED_BASE = OPTIONS.get("parsed_base", "pentair/pump/status")
+CMD_BASE = OPTIONS.get("cmd_base", "pentair/pump/cmd")
+DISCOVERY_BASE = OPTIONS.get("discovery_base", "homeassistant")
+DISCOVERY_PREFIX = OPTIONS.get("discovery_prefix", "pentair_pump")
+ENABLE_DISCOVERY = bool(OPTIONS.get("enable_discovery", True))
+
+CTRL_ADDR = int(OPTIONS.get("ctrl_addr", 33))
+PUMP_ADDR = int(OPTIONS.get("pump_addr", 96"))
+
+LOW_RPM = int(OPTIONS.get("low_rpm", 1650))
+HIGH_RPM = int(OPTIONS.get("high_rpm", 3000))
+STATUS_POLL_INTERVAL = int(OPTIONS.get("status_poll_interval", 15))
 
 DEVICE_NAME = "Pentair Pool Pump"
 DEVICE_ID = "pentair_pool_pump_bridge"
@@ -131,7 +146,7 @@ def device_block():
         "name": DEVICE_NAME,
         "manufacturer": "Pentair",
         "model": "MQTT RS-485 Bridge",
-        "sw_version": "0.1.0",
+        "sw_version": "0.1.3",
     }
 
 
@@ -235,7 +250,7 @@ def publish_discovery(client):
         }
 
         client.publish(topic, json.dumps(payload), retain=True)
-        print(f"[DISCOVERY] Published {topic}")
+        logger.info("Published discovery topic %s", topic)
 
 
 def publish_parsed_status(client, packet, status):
@@ -282,7 +297,7 @@ def publish_parsed_status(client, packet, status):
 
 def publish_frame(client, frame: bytes, label: str):
     info = client.publish(TOPIC_DOWN, frame)
-    print(f"[TX {label}] {hex_dump(frame)} mid={info.mid}")
+    logger.info("TX %s %s mid=%s", label, hex_dump(frame), info.mid)
 
 
 def handle_command(client, topic, payload_text):
@@ -310,18 +325,18 @@ def handle_command(client, topic, payload_text):
             rpm = int(payload_text)
             publish_frame(client, build_set_rpm_request(rpm), f"CMD RPM {rpm}")
         except ValueError:
-            print(f"[CMD] Invalid RPM payload: {payload_text}")
+            logger.warning("Invalid RPM payload: %s", payload_text)
         return
 
-    print(f"[CMD] Unhandled topic: {topic}")
+    logger.warning("Unhandled command topic: %s", topic)
 
 
 def on_connect(client, userdata, flags, reason_code, properties=None):
-    print(f"[MQTT] Connected with rc={reason_code}")
+    logger.info("MQTT connected rc=%s", reason_code)
     client.subscribe(TOPIC_UP)
     client.subscribe(f"{CMD_BASE}/#")
-    print(f"[MQTT] Subscribed to {TOPIC_UP}")
-    print(f"[MQTT] Subscribed to {CMD_BASE}/#")
+    logger.info("Subscribed to %s", TOPIC_UP)
+    logger.info("Subscribed to %s/#", CMD_BASE)
 
     global discovery_published
     if ENABLE_DISCOVERY and not discovery_published:
@@ -334,41 +349,50 @@ def on_message(client, userdata, msg):
 
     if msg.topic.startswith(f"{CMD_BASE}/"):
         payload_text = msg.payload.decode("utf-8", errors="ignore")
-        print(f"[CMD RX] topic={msg.topic} payload={payload_text!r}")
+        logger.info("Command RX topic=%s payload=%r", msg.topic, payload_text)
         handle_command(client, msg.topic, payload_text)
         return
 
     payload = msg.payload
-    print(f"[RX] topic={msg.topic} len={len(payload)}")
-    print(f"[RX HEX] {hex_dump(payload)}")
+    logger.info("RX topic=%s len=%s", msg.topic, len(payload))
+    logger.info("RX HEX %s", hex_dump(payload))
 
     pkt = parse_pentair_packet(payload)
     if pkt is None:
-        print("[DECODE] Not a recognized Pentair frame")
+        logger.warning("Not a recognized Pentair frame")
         return
 
-    print(
-        f"[DECODE] src=0x{pkt['src']:02X} dest=0x{pkt['dest']:02X} "
-        f"action=0x{pkt['action']:02X} len={pkt['data_len']} checksum_ok={pkt['checksum_ok']}"
+    logger.info(
+        "Decoded packet src=0x%02X dest=0x%02X action=0x%02X len=%s checksum_ok=%s",
+        pkt["src"],
+        pkt["dest"],
+        pkt["action"],
+        pkt["data_len"],
+        pkt["checksum_ok"],
     )
 
     if pkt["action"] == 0x07:
         status = decode_status_data(pkt["data"])
-        print(
-            "[STATUS] "
-            f"run={status['run']} mode={status['mode']} drive_state={status['drive_state']} "
-            f"watts={status['watts']} rpm={status['rpm']} "
-            f"timer={status['timer_hours']:02d}:{status['timer_minutes']:02d} "
-            f"clock={status['clock_hours']:02d}:{status['clock_minutes']:02d}"
+        logger.info(
+            "Status run=%s mode=%s drive_state=%s watts=%s rpm=%s timer=%02d:%02d clock=%02d:%02d",
+            status["run"],
+            status["mode"],
+            status["drive_state"],
+            status["watts"],
+            status["rpm"],
+            status["timer_hours"] if status["timer_hours"] is not None else 0,
+            status["timer_minutes"] if status["timer_minutes"] is not None else 0,
+            status["clock_hours"] if status["clock_hours"] is not None else 0,
+            status["clock_minutes"] if status["clock_minutes"] is not None else 0,
         )
 
         if listener_publish_client is not None:
             publish_parsed_status(listener_publish_client, pkt, status)
-            print(f"[MQTT] Published parsed status to {PARSED_BASE}/#")
+            logger.info("Published parsed status to %s/#", PARSED_BASE)
 
 
 def on_publish(client, userdata, mid, reason_code=None, properties=None):
-    print(f"[MQTT] Publish acknowledged mid={mid}")
+    logger.info("MQTT publish acknowledged mid=%s", mid)
 
 
 def mqtt_listener():
@@ -394,7 +418,9 @@ def main():
     global command_client
 
     if not BROKER:
-        raise RuntimeError("BROKER is required")
+        raise RuntimeError("broker is required in add-on configuration")
+
+    logger.info("Starting Pentair bridge with broker=%s port=%s", BROKER, PORT)
 
     listener_thread = threading.Thread(target=mqtt_listener, daemon=True)
     listener_thread.start()
