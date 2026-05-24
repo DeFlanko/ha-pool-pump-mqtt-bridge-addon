@@ -1,5 +1,4 @@
-ARG BUILD_FROM
-FROM ${BUILD_FROM}
+FROM ghcr.io/home-assistant/amd64-base:3.19
 
 WORKDIR /app
 
@@ -11,4 +10,4 @@ COPY pentair_bridge.py /app/pentair_bridge.py
 
 RUN chmod a+x /run.sh
 
-CMD [ "/run.sh" ]
+CMD ["/run.sh"]
