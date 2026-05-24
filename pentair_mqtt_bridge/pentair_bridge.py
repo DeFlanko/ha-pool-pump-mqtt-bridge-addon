@@ -15,6 +15,9 @@ TOPIC_DOWN = os.getenv("TOPIC_DOWN", "D4AD20CF144A/down")
 
 PARSED_BASE = os.getenv("PARSED_BASE", "pentair/pump/status")
 CMD_BASE = os.getenv("CMD_BASE", "pentair/pump/cmd")
+DISCOVERY_BASE = os.getenv("DISCOVERY_BASE", "homeassistant")
+DISCOVERY_PREFIX = os.getenv("DISCOVERY_PREFIX", "pentair_pump")
+ENABLE_DISCOVERY = os.getenv("ENABLE_DISCOVERY", "true").lower() == "true"
 
 CTRL_ADDR = int(os.getenv("CTRL_ADDR", "33"))
 PUMP_ADDR = int(os.getenv("PUMP_ADDR", "96"))
@@ -23,9 +26,13 @@ LOW_RPM = int(os.getenv("LOW_RPM", "1650"))
 HIGH_RPM = int(os.getenv("HIGH_RPM", "3000"))
 STATUS_POLL_INTERVAL = int(os.getenv("STATUS_POLL_INTERVAL", "15"))
 
+DEVICE_NAME = "Pentair Pool Pump"
+DEVICE_ID = "pentair_pool_pump_bridge"
+
 listener_publish_client = None
 command_client = None
 stop_event = threading.Event()
+discovery_published = False
 
 
 def hex_dump(data: bytes) -> str:
@@ -118,6 +125,119 @@ def decode_status_data(data: bytes):
     return out
 
 
+def device_block():
+    return {
+        "identifiers": [DEVICE_ID],
+        "name": DEVICE_NAME,
+        "manufacturer": "Pentair",
+        "model": "MQTT RS-485 Bridge",
+        "sw_version": "0.1.0",
+    }
+
+
+def publish_discovery(client):
+    entities = {
+        "sensor_rpm": {
+            "component": "sensor",
+            "object_id": "rpm",
+            "name": "Pump RPM",
+            "state_topic": f"{PARSED_BASE}/rpm",
+            "unit_of_measurement": "RPM",
+            "icon": "mdi:rotate-right",
+        },
+        "sensor_watts": {
+            "component": "sensor",
+            "object_id": "watts",
+            "name": "Pump Power",
+            "state_topic": f"{PARSED_BASE}/watts",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "state_class": "measurement",
+            "icon": "mdi:flash",
+        },
+        "sensor_run": {
+            "component": "sensor",
+            "object_id": "run",
+            "name": "Pump Run",
+            "state_topic": f"{PARSED_BASE}/run",
+            "icon": "mdi:play-circle",
+        },
+        "sensor_mode": {
+            "component": "sensor",
+            "object_id": "mode",
+            "name": "Pump Mode",
+            "state_topic": f"{PARSED_BASE}/mode",
+            "icon": "mdi:cog",
+        },
+        "sensor_drive_state": {
+            "component": "sensor",
+            "object_id": "drive_state",
+            "name": "Pump Drive State",
+            "state_topic": f"{PARSED_BASE}/drive_state",
+            "icon": "mdi:engine",
+        },
+        "button_status": {
+            "component": "button",
+            "object_id": "status",
+            "name": "Poll Pump Status",
+            "command_topic": f"{CMD_BASE}/status",
+            "payload_press": "1",
+            "icon": "mdi:refresh",
+        },
+        "button_off": {
+            "component": "button",
+            "object_id": "off",
+            "name": "Pump Off",
+            "command_topic": f"{CMD_BASE}/off",
+            "payload_press": "1",
+            "icon": "mdi:stop-circle",
+        },
+        "button_low": {
+            "component": "button",
+            "object_id": "low",
+            "name": "Pump Low",
+            "command_topic": f"{CMD_BASE}/low",
+            "payload_press": "1",
+            "icon": "mdi:fan-speed-1",
+        },
+        "button_high": {
+            "component": "button",
+            "object_id": "high",
+            "name": "Pump High",
+            "command_topic": f"{CMD_BASE}/high",
+            "payload_press": "1",
+            "icon": "mdi:fan-speed-3",
+        },
+        "number_rpm_target": {
+            "component": "number",
+            "object_id": "target_rpm",
+            "name": "Pump Target RPM",
+            "command_topic": f"{CMD_BASE}/rpm",
+            "state_topic": f"{PARSED_BASE}/rpm",
+            "min": 450,
+            "max": 3450,
+            "step": 10,
+            "mode": "box",
+            "unit_of_measurement": "RPM",
+            "icon": "mdi:speedometer",
+        },
+    }
+
+    for unique_suffix, entity in entities.items():
+        component = entity.pop("component")
+        object_id = entity.pop("object_id")
+        topic = f"{DISCOVERY_BASE}/{component}/{DISCOVERY_PREFIX}/{object_id}/config"
+
+        payload = {
+            **entity,
+            "unique_id": f"{DEVICE_ID}_{unique_suffix}",
+            "device": device_block(),
+        }
+
+        client.publish(topic, json.dumps(payload), retain=True)
+        print(f"[DISCOVERY] Published {topic}")
+
+
 def publish_parsed_status(client, packet, status):
     payload = {
         "timestamp": int(time.time()),
@@ -202,6 +322,11 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
     client.subscribe(f"{CMD_BASE}/#")
     print(f"[MQTT] Subscribed to {TOPIC_UP}")
     print(f"[MQTT] Subscribed to {CMD_BASE}/#")
+
+    global discovery_published
+    if ENABLE_DISCOVERY and not discovery_published:
+        publish_discovery(client)
+        discovery_published = True
 
 
 def on_message(client, userdata, msg):
