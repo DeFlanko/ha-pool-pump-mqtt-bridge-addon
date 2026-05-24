@@ -1,7 +1,7 @@
 name: "Pentair MQTT Bridge"
 version: "0.1.0"
 slug: "pentair_mqtt_bridge"
-description: "Bridge a Pentair IntelliFlo pump over RS-485/MQTT and publish decoded status."
+description: "Bridge a Pentair pool pump over MQTT, decode status, and publish control/state topics."
 url: "https://github.com/DeFlanko/ha-pool-pump-mqtt-bridge-addon"
 startup: services
 boot: auto
@@ -11,8 +11,6 @@ arch:
   - amd64
   - armv7
   - i386
-map:
-  - config:rw
 options:
   broker: ""
   port: 1883
@@ -22,22 +20,28 @@ options:
   topic_down: "D4AD20CF144A/down"
   parsed_base: "pentair/pump/status"
   cmd_base: "pentair/pump/cmd"
+  discovery_base: "homeassistant"
+  discovery_prefix: "pentair_pump"
   ctrl_addr: 33
   pump_addr: 96
   low_rpm: 1650
   high_rpm: 3000
   status_poll_interval: 15
+  enable_discovery: true
 schema:
   broker: str
-  port: int
+  port: port
   username: str?
   password: password?
   topic_up: str
   topic_down: str
   parsed_base: str
   cmd_base: str
+  discovery_base: str
+  discovery_prefix: str
   ctrl_addr: int
   pump_addr: int
   low_rpm: int
   high_rpm: int
   status_poll_interval: int
+  enable_discovery: bool
