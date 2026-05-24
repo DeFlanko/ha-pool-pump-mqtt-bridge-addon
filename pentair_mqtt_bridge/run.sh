@@ -1,6 +1,8 @@
 #!/usr/bin/with-contenv bashio
 set -e
 
+bashio::log.info "Starting Pentair MQTT Bridge"
+
 export BROKER="$(bashio::config 'broker')"
 export PORT="$(bashio::config 'port')"
 export USERNAME="$(bashio::config 'username')"
@@ -18,4 +20,4 @@ export HIGH_RPM="$(bashio::config 'high_rpm')"
 export STATUS_POLL_INTERVAL="$(bashio::config 'status_poll_interval')"
 export ENABLE_DISCOVERY="$(bashio::config 'enable_discovery')"
 
-python3 /app/pentair_bridge.py
+exec python3 /app/pentair_bridge.py
