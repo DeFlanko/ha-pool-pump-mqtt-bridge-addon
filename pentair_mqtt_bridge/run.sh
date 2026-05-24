@@ -1,0 +1,18 @@
+#!/usr/bin/with-contenv bashio
+set -e
+
+export BROKER="$(bashio::config 'broker')"
+export PORT="$(bashio::config 'port')"
+export USERNAME="$(bashio::config 'username')"
+export PASSWORD="$(bashio::config 'password')"
+export TOPIC_UP="$(bashio::config 'topic_up')"
+export TOPIC_DOWN="$(bashio::config 'topic_down')"
+export PARSED_BASE="$(bashio::config 'parsed_base')"
+export CMD_BASE="$(bashio::config 'cmd_base')"
+export CTRL_ADDR="$(bashio::config 'ctrl_addr')"
+export PUMP_ADDR="$(bashio::config 'pump_addr')"
+export LOW_RPM="$(bashio::config 'low_rpm')"
+export HIGH_RPM="$(bashio::config 'high_rpm')"
+export STATUS_POLL_INTERVAL="$(bashio::config 'status_poll_interval')"
+
+python3 /app/pentair_bridge.py
