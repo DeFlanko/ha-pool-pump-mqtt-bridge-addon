@@ -1,5 +1,5 @@
 name: "Pentair MQTT Bridge"
-version: "0.1.3"
+version: "0.1.4"
 slug: "pentair_mqtt_bridge"
 description: "Bridge a Pentair pool pump over MQTT, decode status, and publish control/state topics."
 url: "https://github.com/DeFlanko/ha-pool-pump-mqtt-bridge-addon"
@@ -21,8 +21,8 @@ options:
   discovery_prefix: "pentair_pump"
   ctrl_addr: 33
   pump_addr: 96
-  low_rpm: 1650
-  high_rpm: 3000
+  low_rpm: 1600
+  high_rpm: 3450
   status_poll_interval: 15
   enable_discovery: true
 schema:
