@@ -22,8 +22,8 @@ ENABLE_DISCOVERY = os.getenv("ENABLE_DISCOVERY", "true").lower() == "true"
 CTRL_ADDR = int(os.getenv("CTRL_ADDR", "33"))
 PUMP_ADDR = int(os.getenv("PUMP_ADDR", "96"))
 
-LOW_RPM = int(os.getenv("LOW_RPM", "1650"))
-HIGH_RPM = int(os.getenv("HIGH_RPM", "3000"))
+LOW_RPM = int(os.getenv("LOW_RPM", "1600"))
+HIGH_RPM = int(os.getenv("HIGH_RPM", "3450"))
 STATUS_POLL_INTERVAL = int(os.getenv("STATUS_POLL_INTERVAL", "15"))
 
 DEVICE_NAME = "Pentair Pool Pump"
