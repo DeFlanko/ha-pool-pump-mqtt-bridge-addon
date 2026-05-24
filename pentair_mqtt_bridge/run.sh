@@ -1,5 +1,7 @@
-#!/usr/bin/with-contenv bashio
+#!/usr/bin/with-contenv bash
 set -e
+
+source /usr/lib/bashio/bashio.sh
 
 bashio::log.info "Starting Pentair MQTT Bridge"
 
