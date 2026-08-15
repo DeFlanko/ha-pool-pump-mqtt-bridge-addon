@@ -59,6 +59,9 @@ pump_addr: 96
 low_rpm: 1650
 high_rpm: 3000
 status_poll_interval: 15
+control_mode: on_demand
+control_release_seconds: 60
+min_command_interval_seconds: 1.0
 ```
 
 ## MQTT topics
@@ -88,6 +91,15 @@ These are configurable in the add-on options.
 
 Example:
 - publish `2200` to `pentair/pump/cmd/rpm`
+
+## Control modes
+
+| Option | Description |
+|---|---|
+| `control_mode: on_demand` | **(default)** After a remote command, hold control for `control_release_seconds` then go read-only. Preserves local keypad usability. |
+| `control_mode: continuous` | Always reassert control (original behavior). |
+
+See `DOCS.md` in the add-on for full option descriptions.
 
 ## Notes
 
