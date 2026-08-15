@@ -45,7 +45,11 @@ ctrl_addr: 33
 pump_addr: 96
 low_rpm: 1650
 high_rpm: 3000
-status_poll_interval: 15
+status_poll_interval_seconds: 15
+status_poll_mode: active
+control_mode: on_demand
+control_release_seconds: 60
+min_command_interval_seconds: 1.0
 ```
 
 ### Configuration options
@@ -110,8 +114,10 @@ RPM used when sending the `low` command.
 #### `high_rpm`
 RPM used when sending the `high` command.
 
-#### `status_poll_interval`
-How often the add-on automatically polls the pump for status, in seconds.
+#### `status_poll_interval_seconds`
+How often the add-on polls the pump for status when `status_poll_mode` is `active`, in seconds.
+
+Default: `15`
 
 ---
 
@@ -141,6 +147,35 @@ Only applies when `control_mode` is `on_demand`.
 Minimum time in seconds between consecutive control commands. Commands arriving faster than this rate are dropped with a log message.
 
 Default: `1.0`
+
+---
+
+## Status polling options
+
+### `status_poll_mode`
+
+Controls whether the bridge actively sends AUTO STATUS requests to the pump.
+
+| Value | Behavior |
+|---|---|
+| `active` | **(default)** Sends a Pentair AUTO STATUS frame to the pump every `status_poll_interval_seconds`. This is the original behavior. |
+| `passive` | **Never** sends AUTO STATUS frames. Telemetry is published only when the pump sends uplink RS-485 frames that arrive on the `topic_up` MQTT topic. |
+
+> **Keypad usability note:** Some Pentair pump firmware versions treat any RS-485 frame sent by an external controller — including the AUTO STATUS poll — as evidence of an active automation system. This causes the local keypad to display **"Display Not Active"** and prevents manual keypad operation while the integration is running.
+>
+> If you experience this, set `status_poll_mode: passive`. In passive mode, the bridge never transmits status requests. The local keypad remains usable at all times, and telemetry is still published to Home Assistant whenever the pump sends its own periodic uplink status frames.
+>
+> **Trade-off:** In passive mode, telemetry updates depend on the pump generating its own bus traffic. If the pump is idle and produces no uplink frames, telemetry will not update until the pump sends a frame on its own or a remote command is sent.
+
+If an invalid value is supplied, the bridge falls back to `active` and logs a warning.
+
+### `status_poll_interval_seconds`
+
+How often (in seconds) the bridge sends an AUTO STATUS poll to the pump when `status_poll_mode` is `active`.
+
+Default: `15`
+
+Has no effect when `status_poll_mode` is `passive`.
 
 ---
 

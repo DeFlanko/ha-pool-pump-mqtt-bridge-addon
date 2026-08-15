@@ -58,7 +58,8 @@ ctrl_addr: 33
 pump_addr: 96
 low_rpm: 1650
 high_rpm: 3000
-status_poll_interval: 15
+status_poll_interval_seconds: 15
+status_poll_mode: active
 control_mode: on_demand
 control_release_seconds: 60
 min_command_interval_seconds: 1.0
@@ -98,6 +99,15 @@ Example:
 |---|---|
 | `control_mode: on_demand` | **(default)** After a remote command, hold control for `control_release_seconds` then go read-only. Preserves local keypad usability. |
 | `control_mode: continuous` | Always reassert control (original behavior). |
+
+## Status poll modes
+
+| Option | Description |
+|---|---|
+| `status_poll_mode: active` | **(default)** Sends an AUTO STATUS frame every `status_poll_interval_seconds`. Provides regular telemetry updates. |
+| `status_poll_mode: passive` | Never sends AUTO STATUS frames. Telemetry updates from uplink frames only. **Preserves local keypad on pumps that lock the display when polled.** |
+
+> **Local keypad tip:** Some Pentair pump firmware versions lock the keypad and show **"Display Not Active"** whenever any RS-485 frame is transmitted by an external device — including routine status polls. If your keypad is locked while the integration is running, set `status_poll_mode: passive`. The local display will remain usable, and telemetry will still publish whenever the pump sends its own uplink frames.
 
 See `DOCS.md` in the add-on for full option descriptions.
 

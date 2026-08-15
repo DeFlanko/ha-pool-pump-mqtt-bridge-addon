@@ -28,6 +28,8 @@ options:
   control_mode: "on_demand"
   control_release_seconds: 60
   min_command_interval_seconds: 1.0
+  status_poll_mode: "active"
+  status_poll_interval_seconds: 15
 schema:
   broker: str
   port: port
@@ -48,3 +50,5 @@ schema:
   control_mode: str?
   control_release_seconds: int?
   min_command_interval_seconds: float?
+  status_poll_mode: str?
+  status_poll_interval_seconds: float?
