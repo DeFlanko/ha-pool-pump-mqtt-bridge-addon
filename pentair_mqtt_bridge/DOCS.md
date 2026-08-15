@@ -115,6 +115,35 @@ How often the add-on automatically polls the pump for status, in seconds.
 
 ---
 
+## Control mode options
+
+### `control_mode`
+
+Controls how the bridge behaves after sending a command to the pump.
+
+| Value | Behavior |
+|---|---|
+| `on_demand` | **(default, recommended)** After a command is sent, the bridge holds control for `control_release_seconds`, then stops reasserting and returns to read-only polling. This allows the local Pentair keypad to resume control after the hold window expires. |
+| `continuous` | The bridge continuously reasserts control (original behavior). |
+
+If an invalid value is supplied, the bridge falls back to `on_demand` and logs a warning.
+
+### `control_release_seconds`
+
+How many seconds after a control command is sent before the bridge releases control and returns to read-only polling.
+
+Default: `60`
+
+Only applies when `control_mode` is `on_demand`.
+
+### `min_command_interval_seconds`
+
+Minimum time in seconds between consecutive control commands. Commands arriving faster than this rate are dropped with a log message.
+
+Default: `1.0`
+
+---
+
 ## MQTT topics
 
 ### Parsed status topics

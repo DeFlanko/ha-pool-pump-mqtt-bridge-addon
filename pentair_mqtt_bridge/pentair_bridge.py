@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import threading
@@ -41,6 +42,18 @@ LOW_RPM = int(OPTIONS.get("low_rpm", 1650))
 HIGH_RPM = int(OPTIONS.get("high_rpm", 3000))
 STATUS_POLL_INTERVAL = int(OPTIONS.get("status_poll_interval", 15))
 
+_raw_control_mode = OPTIONS.get("control_mode", "on_demand")
+if _raw_control_mode not in ("on_demand", "continuous"):
+    logger.warning(
+        "Invalid control_mode %r; falling back to 'on_demand'", _raw_control_mode
+    )
+    _raw_control_mode = "on_demand"
+CONTROL_MODE = _raw_control_mode
+
+CONTROL_RELEASE_SECONDS = int(OPTIONS.get("control_release_seconds", 60))
+MIN_COMMAND_INTERVAL_SECONDS = float(OPTIONS.get("min_command_interval_seconds", 1.0))
+DEDUPE_WINDOW_SECONDS = 2.0
+
 DEVICE_NAME = "Pentair Pool Pump"
 DEVICE_ID = "pentair_pool_pump_bridge"
 
@@ -48,6 +61,12 @@ listener_publish_client = None
 command_client = None
 stop_event = threading.Event()
 discovery_published = False
+
+# --- control state ---
+_control_lock = threading.Lock()
+_last_cmd_hash: str | None = None
+_last_cmd_time: float = 0.0
+_hold_until: float = 0.0  # epoch second when hold window expires
 
 
 def hex_dump(data: bytes) -> str:
@@ -300,6 +319,54 @@ def publish_frame(client, frame: bytes, label: str):
     logger.info("TX %s %s mid=%s", label, hex_dump(frame), info.mid)
 
 
+def _cmd_fingerprint(frame: bytes) -> str:
+    return hashlib.sha1(frame).hexdigest()
+
+
+def _in_hold_window() -> bool:
+    return time.monotonic() < _hold_until
+
+
+def publish_control_frame(client, frame: bytes, label: str) -> bool:
+    """Send a control frame, applying dedupe and rate-limiting.
+
+    Returns True if the frame was sent, False if it was skipped.
+    """
+    global _last_cmd_hash, _last_cmd_time, _hold_until
+
+    now = time.monotonic()
+    fp = _cmd_fingerprint(frame)
+
+    with _control_lock:
+        # Dedupe: skip if same command within 2 s
+        if fp == _last_cmd_hash and (now - _last_cmd_time) < DEDUPE_WINDOW_SECONDS:
+            logger.info("CTRL duplicate skipped label=%s", label)
+            return False
+
+        # Rate limit
+        elapsed = now - _last_cmd_time
+        if elapsed < MIN_COMMAND_INTERVAL_SECONDS:
+            logger.info(
+                "CTRL rate-limited label=%s elapsed=%.2fs min=%.2fs",
+                label, elapsed, MIN_COMMAND_INTERVAL_SECONDS,
+            )
+            return False
+
+        # Send
+        publish_frame(client, frame, label)
+        logger.info("CTRL command sent label=%s mode=%s", label, CONTROL_MODE)
+        _last_cmd_hash = fp
+        _last_cmd_time = now
+
+        if CONTROL_MODE == "on_demand":
+            _hold_until = now + CONTROL_RELEASE_SECONDS
+            logger.info(
+                "CTRL hold window started; releases in %ds", CONTROL_RELEASE_SECONDS
+            )
+
+    return True
+
+
 def handle_command(client, topic, payload_text):
     topic = topic.strip()
     payload_text = payload_text.strip()
@@ -309,21 +376,21 @@ def handle_command(client, topic, payload_text):
         return
 
     if topic == f"{CMD_BASE}/off":
-        publish_frame(client, build_off_request(), "CMD OFF")
+        publish_control_frame(client, build_off_request(), "CMD OFF")
         return
 
     if topic == f"{CMD_BASE}/low":
-        publish_frame(client, build_set_rpm_request(LOW_RPM), "CMD LOW")
+        publish_control_frame(client, build_set_rpm_request(LOW_RPM), "CMD LOW")
         return
 
     if topic == f"{CMD_BASE}/high":
-        publish_frame(client, build_set_rpm_request(HIGH_RPM), "CMD HIGH")
+        publish_control_frame(client, build_set_rpm_request(HIGH_RPM), "CMD HIGH")
         return
 
     if topic == f"{CMD_BASE}/rpm":
         try:
             rpm = int(payload_text)
-            publish_frame(client, build_set_rpm_request(rpm), f"CMD RPM {rpm}")
+            publish_control_frame(client, build_set_rpm_request(rpm), f"CMD RPM {rpm}")
         except ValueError:
             logger.warning("Invalid RPM payload: %s", payload_text)
         return
@@ -406,9 +473,27 @@ def mqtt_listener():
     client.loop_forever()
 
 
+_hold_logged_expired = False
+
+
 def autopoll_loop():
+    global _hold_logged_expired
     while not stop_event.is_set():
         if command_client is not None:
+            if CONTROL_MODE == "on_demand":
+                now = time.monotonic()
+                with _control_lock:
+                    hold_until = _hold_until
+                    logged = _hold_logged_expired
+                if hold_until > 0 and now >= hold_until and not logged:
+                    logger.info(
+                        "CTRL hold window expired; resuming read-only polling"
+                    )
+                    with _control_lock:
+                        _hold_logged_expired = True
+                elif now < hold_until:
+                    with _control_lock:
+                        _hold_logged_expired = False
             publish_frame(command_client, build_status_request(), "AUTO STATUS")
         stop_event.wait(STATUS_POLL_INTERVAL)
 
@@ -421,6 +506,10 @@ def main():
         raise RuntimeError("broker is required in add-on configuration")
 
     logger.info("Starting Pentair bridge with broker=%s port=%s", BROKER, PORT)
+    logger.info(
+        "Control mode: %s (release=%ds, min_interval=%.2fs)",
+        CONTROL_MODE, CONTROL_RELEASE_SECONDS, MIN_COMMAND_INTERVAL_SECONDS,
+    )
 
     listener_thread = threading.Thread(target=mqtt_listener, daemon=True)
     listener_thread.start()

@@ -1,5 +1,5 @@
 name: "Pentair MQTT Bridge"
-version: "0.1.4"
+version: "0.2.0"
 slug: "pentair_mqtt_bridge"
 description: "Bridge a Pentair pool pump over MQTT, decode status, and publish control/state topics."
 url: "https://github.com/DeFlanko/ha-pool-pump-mqtt-bridge-addon"
@@ -25,6 +25,9 @@ options:
   high_rpm: 3450
   status_poll_interval: 15
   enable_discovery: true
+  control_mode: "on_demand"
+  control_release_seconds: 60
+  min_command_interval_seconds: 1.0
 schema:
   broker: str
   port: port
@@ -42,3 +45,6 @@ schema:
   high_rpm: int
   status_poll_interval: int
   enable_discovery: bool
+  control_mode: str?
+  control_release_seconds: int?
+  min_command_interval_seconds: float?
