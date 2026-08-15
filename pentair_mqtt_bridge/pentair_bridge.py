@@ -40,7 +40,6 @@ PUMP_ADDR = int(OPTIONS.get("pump_addr", 96))
 
 LOW_RPM = int(OPTIONS.get("low_rpm", 1650))
 HIGH_RPM = int(OPTIONS.get("high_rpm", 3000))
-STATUS_POLL_INTERVAL = int(OPTIONS.get("status_poll_interval", 15))
 
 _raw_control_mode = OPTIONS.get("control_mode", "on_demand")
 if _raw_control_mode not in ("on_demand", "continuous"):
@@ -53,6 +52,22 @@ CONTROL_MODE = _raw_control_mode
 CONTROL_RELEASE_SECONDS = int(OPTIONS.get("control_release_seconds", 60))
 MIN_COMMAND_INTERVAL_SECONDS = float(OPTIONS.get("min_command_interval_seconds", 1.0))
 DEDUPE_WINDOW_SECONDS = 2.0
+
+_raw_poll_mode = OPTIONS.get("status_poll_mode", "active").lower()
+if _raw_poll_mode not in ("active", "passive"):
+    logger.warning(
+        "Invalid status_poll_mode %r; falling back to 'active'", _raw_poll_mode
+    )
+    _raw_poll_mode = "active"
+STATUS_POLL_MODE = _raw_poll_mode
+
+# status_poll_interval_seconds overrides the older status_poll_interval if provided
+STATUS_POLL_INTERVAL = float(
+    OPTIONS.get(
+        "status_poll_interval_seconds",
+        OPTIONS.get("status_poll_interval", 15),
+    )
+)
 
 DEVICE_NAME = "Pentair Pool Pump"
 DEVICE_ID = "pentair_pool_pump_bridge"
@@ -510,6 +525,10 @@ def main():
         "Control mode: %s (release=%ds, min_interval=%.2fs)",
         CONTROL_MODE, CONTROL_RELEASE_SECONDS, MIN_COMMAND_INTERVAL_SECONDS,
     )
+    logger.info(
+        "Status poll mode: %s (interval=%.0fs)",
+        STATUS_POLL_MODE, STATUS_POLL_INTERVAL,
+    )
 
     listener_thread = threading.Thread(target=mqtt_listener, daemon=True)
     listener_thread.start()
@@ -524,8 +543,14 @@ def main():
     listener_publish_client = client
     command_client = client
 
-    poll_thread = threading.Thread(target=autopoll_loop, daemon=True)
-    poll_thread.start()
+    if STATUS_POLL_MODE == "passive":
+        logger.info(
+            "Status poll mode: passive — active AUTO STATUS polling disabled; "
+            "telemetry updates from incoming uplink frames only."
+        )
+    else:
+        poll_thread = threading.Thread(target=autopoll_loop, daemon=True)
+        poll_thread.start()
 
     while not stop_event.is_set():
         time.sleep(1)
