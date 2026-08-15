@@ -52,6 +52,7 @@ CONTROL_MODE = _raw_control_mode
 
 CONTROL_RELEASE_SECONDS = int(OPTIONS.get("control_release_seconds", 60))
 MIN_COMMAND_INTERVAL_SECONDS = float(OPTIONS.get("min_command_interval_seconds", 1.0))
+DEDUPE_WINDOW_SECONDS = 2.0
 
 DEVICE_NAME = "Pentair Pool Pump"
 DEVICE_ID = "pentair_pool_pump_bridge"
@@ -338,7 +339,7 @@ def publish_control_frame(client, frame: bytes, label: str) -> bool:
 
     with _control_lock:
         # Dedupe: skip if same command within 2 s
-        if fp == _last_cmd_hash and (now - _last_cmd_time) < 2.0:
+        if fp == _last_cmd_hash and (now - _last_cmd_time) < DEDUPE_WINDOW_SECONDS:
             logger.info("CTRL duplicate skipped label=%s", label)
             return False
 
@@ -358,7 +359,7 @@ def publish_control_frame(client, frame: bytes, label: str) -> bool:
         _last_cmd_time = now
 
         if CONTROL_MODE == "on_demand":
-            _hold_until = time.monotonic() + CONTROL_RELEASE_SECONDS
+            _hold_until = now + CONTROL_RELEASE_SECONDS
             logger.info(
                 "CTRL hold window started; releases in %ds", CONTROL_RELEASE_SECONDS
             )
@@ -481,13 +482,18 @@ def autopoll_loop():
         if command_client is not None:
             if CONTROL_MODE == "on_demand":
                 now = time.monotonic()
-                if _hold_until > 0 and now >= _hold_until and not _hold_logged_expired:
+                with _control_lock:
+                    hold_until = _hold_until
+                    logged = _hold_logged_expired
+                if hold_until > 0 and now >= hold_until and not logged:
                     logger.info(
                         "CTRL hold window expired; resuming read-only polling"
                     )
-                    _hold_logged_expired = True
-                elif _in_hold_window():
-                    _hold_logged_expired = False
+                    with _control_lock:
+                        _hold_logged_expired = True
+                elif now < hold_until:
+                    with _control_lock:
+                        _hold_logged_expired = False
             publish_frame(command_client, build_status_request(), "AUTO STATUS")
         stop_event.wait(STATUS_POLL_INTERVAL)
 
