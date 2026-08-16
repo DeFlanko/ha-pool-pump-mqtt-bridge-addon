@@ -45,11 +45,12 @@ ctrl_addr: 33
 pump_addr: 96
 low_rpm: 1650
 high_rpm: 3000
-status_poll_interval_seconds: 15
+status_poll_interval_seconds: 30
 status_poll_mode: active
 control_mode: on_demand
 control_release_seconds: 60
 min_command_interval_seconds: 1.0
+cleaning_mode: false
 ```
 
 ### Configuration options
@@ -117,7 +118,9 @@ RPM used when sending the `high` command.
 #### `status_poll_interval_seconds`
 How often the add-on polls the pump for status when `status_poll_mode` is `active`, in seconds.
 
-Default: `15`
+Default: `30`
+
+> **Panel lock tip:** If you observe the pump display showing **"Display Not Active"** during normal automation use, increase this value significantly (e.g., `900` for 15-minute intervals) or switch to `cleaning_mode` during manual maintenance sessions.
 
 ---
 
@@ -163,7 +166,7 @@ Controls whether the bridge actively sends AUTO STATUS requests to the pump.
 
 > **Keypad usability note:** Some Pentair pump firmware versions treat any RS-485 frame sent by an external controller — including the AUTO STATUS poll — as evidence of an active automation system. This causes the local keypad to display **"Display Not Active"** and prevents manual keypad operation while the integration is running.
 >
-> If you experience this, set `status_poll_mode: passive`. In passive mode, the bridge never transmits status requests. The local keypad remains usable at all times, and telemetry is still published to Home Assistant whenever the pump sends its own periodic uplink status frames.
+> If you experience this, either set `status_poll_mode: passive` or use **cleaning mode** (see below) during maintenance periods. In passive mode the bridge never transmits status requests; the local keypad remains usable at all times, and telemetry is still published to Home Assistant whenever the pump sends its own periodic uplink status frames.
 >
 > **Trade-off:** In passive mode, telemetry updates depend on the pump generating its own bus traffic. If the pump is idle and produces no uplink frames, telemetry will not update until the pump sends a frame on its own or a remote command is sent.
 
@@ -173,9 +176,53 @@ If an invalid value is supplied, the bridge falls back to `active` and logs a wa
 
 How often (in seconds) the bridge sends an AUTO STATUS poll to the pump when `status_poll_mode` is `active`.
 
-Default: `15`
+Default: `30`
 
 Has no effect when `status_poll_mode` is `passive`.
+
+---
+
+## Cleaning mode
+
+Cleaning mode suspends all active polling so the physical pump panel remains freely usable during manual maintenance (e.g., vacuuming, backwash, filter cleaning).
+
+### `cleaning_mode` (config option)
+
+Set to `true` to start the add-on with polling suspended.
+
+Default: `false`
+
+### Runtime control via MQTT
+
+You can toggle cleaning mode at any time without restarting the add-on by publishing to:
+
+```
+pentair/pump/cmd/set/cleaning_mode
+```
+
+Accepted payloads: `ON`, `OFF`, `1`, `0`, `TRUE`, `FALSE`, `YES`, `NO` (case-insensitive).
+
+**Enable cleaning mode** (suspend polling):
+```
+Topic:   pentair/pump/cmd/set/cleaning_mode
+Payload: ON
+```
+
+**Disable cleaning mode** (resume polling):
+```
+Topic:   pentair/pump/cmd/set/cleaning_mode
+Payload: OFF
+```
+
+When cleaning mode is disabled, the bridge immediately sends a status poll so Home Assistant reflects the current pump state without waiting for the next scheduled interval.
+
+The current cleaning mode state is published (retained) to:
+
+```
+pentair/pump/status/cleaning_mode
+```
+
+In Home Assistant, the MQTT discovery switch entity **Cleaning Mode** lets you toggle this from the UI or an automation.
 
 ---
 
@@ -193,8 +240,21 @@ The add-on publishes decoded pump data to these topics:
 - `pentair/pump/status/drive_state`
 - `pentair/pump/status/timer`
 - `pentair/pump/status/clock`
+- `pentair/pump/status/schedule_enabled` — `ON` or `OFF`; derived from the run-byte schedule flag
+- `pentair/pump/status/cleaning_mode` — `ON` or `OFF`; current polling state
 
-If you change `parsed_base`, these topic paths will change accordingly.
+#### Speed preset topics
+
+When the pump is running on a numbered speed preset (Speed 1–4 buttons), the active RPM is published to:
+
+- `pentair/pump/status/speed/1/rpm`
+- `pentair/pump/status/speed/2/rpm`
+- `pentair/pump/status/speed/3/rpm`
+- `pentair/pump/status/speed/4/rpm`
+
+These topics are updated only when the pump reports operating on the corresponding speed slot. They retain their last published value so HA always has a reference for each configured speed.
+
+If you change `parsed_base`, all topic paths above will change accordingly.
 
 ### Command topics
 
@@ -205,6 +265,7 @@ The add-on listens on:
 - `pentair/pump/cmd/low`
 - `pentair/pump/cmd/high`
 - `pentair/pump/cmd/rpm`
+- `pentair/pump/cmd/set/cleaning_mode`
 
 If you change `cmd_base`, these topic paths will change accordingly.
 
@@ -234,6 +295,30 @@ Set a specific RPM:
 
 - Topic: `pentair/pump/cmd/rpm`
 - Payload: `2200`
+
+Enable cleaning mode:
+
+- Topic: `pentair/pump/cmd/set/cleaning_mode`
+- Payload: `ON`
+
+Disable cleaning mode:
+
+- Topic: `pentair/pump/cmd/set/cleaning_mode`
+- Payload: `OFF`
+
+---
+
+## Schedule enabled state
+
+The pump's schedule-running flag is exposed as a read-only binary sensor:
+
+- **MQTT topic:** `pentair/pump/status/schedule_enabled`
+- **Values:** `ON` (schedule active) / `OFF` (schedule not active)
+- **HA entity:** `binary_sensor.pump_schedule_enabled` (via MQTT discovery)
+
+This value is derived from bit 2 of the run byte in the pump status response. It reflects whether the pump's internal schedule is currently driving operation.
+
+> **Note:** Writing to the schedule (enable/disable via RS-485 command) requires hardware validation of the specific write register for your pump model and is not implemented in the current version. This is a safe, read-only addition.
 
 ---
 
@@ -291,8 +376,6 @@ If it is misspelled, Home Assistant will not recognize the repo properly.
 
 ## Notes
 
-- This add-on currently publishes MQTT topics but does not yet create Home Assistant entities automatically through MQTT discovery.
-- MQTT discovery can be added in a future version.
 - Broker credentials are supplied through add-on options and are not hardcoded in the add-on source.
 
 ---

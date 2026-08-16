@@ -66,9 +66,15 @@ STATUS_POLL_MODE = _raw_poll_mode
 STATUS_POLL_INTERVAL = float(
     OPTIONS.get(
         "status_poll_interval_seconds",
-        OPTIONS.get("status_poll_interval", 15),
+        OPTIONS.get("status_poll_interval", 30),
     )
 )
+
+# --- Cleaning mode ---
+# When enabled, active polling is suspended so humans can operate the physical
+# panel without the RS-485 bus being driven by the bridge.
+_cleaning_mode_lock = threading.Lock()
+_cleaning_mode: bool = bool(OPTIONS.get("cleaning_mode", False))
 
 DEVICE_NAME = "Pentair Pool Pump"
 DEVICE_ID = "pentair_pool_pump_bridge"
@@ -83,6 +89,9 @@ _control_lock = threading.Lock()
 _last_cmd_hash: str | None = None
 _last_cmd_time: float = 0.0
 _hold_until: float = 0.0  # epoch second when hold window expires
+
+# --- immediate-poll event: set to trigger a poll without waiting for the interval ---
+_poll_now_event = threading.Event()
 
 
 def hex_dump(data: bytes) -> str:
@@ -148,6 +157,22 @@ def parse_pentair_packet(payload: bytes):
 
 
 def decode_status_data(data: bytes):
+    """Decode a Pentair action-0x07 status response payload.
+
+    Byte layout (indices are 0-based within the data field):
+      0      run / status flags
+      1      mode
+      2      drive state
+      3-4    watts (big-endian)
+      5-6    rpm (big-endian)
+      7      timer hours
+      8      timer minutes
+      9      clock hours
+      10     clock minutes
+
+    Bits in byte 0 (run byte):
+      bit 2  (0x04)  – schedule is currently enabled/active
+    """
     out = {
         "run": None,
         "mode": None,
@@ -158,6 +183,8 @@ def decode_status_data(data: bytes):
         "timer_minutes": None,
         "clock_hours": None,
         "clock_minutes": None,
+        # schedule_enabled: derived from bit 2 of run byte (read-only from status)
+        "schedule_enabled": None,
         "raw_data_hex": hex_dump(data),
     }
 
@@ -171,6 +198,8 @@ def decode_status_data(data: bytes):
         out["timer_minutes"] = data[8]
         out["clock_hours"] = data[9]
         out["clock_minutes"] = data[10]
+        # Bit 2 of the run byte indicates schedule-running state
+        out["schedule_enabled"] = bool(data[0] & 0x04)
 
     return out
 
@@ -181,7 +210,7 @@ def device_block():
         "name": DEVICE_NAME,
         "manufacturer": "Pentair",
         "model": "MQTT RS-485 Bridge",
-        "sw_version": "0.1.3",
+        "sw_version": "0.3.0",
     }
 
 
@@ -225,6 +254,60 @@ def publish_discovery(client):
             "name": "Pump Drive State",
             "state_topic": f"{PARSED_BASE}/drive_state",
             "icon": "mdi:engine",
+        },
+        # Schedule enabled – read-only binary sensor derived from run-byte bit 2
+        "binary_sensor_schedule_enabled": {
+            "component": "binary_sensor",
+            "object_id": "schedule_enabled",
+            "name": "Pump Schedule Enabled",
+            "state_topic": f"{PARSED_BASE}/schedule_enabled",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "icon": "mdi:calendar-check",
+        },
+        # Cleaning mode – runtime-controllable switch
+        "switch_cleaning_mode": {
+            "component": "switch",
+            "object_id": "cleaning_mode",
+            "name": "Cleaning Mode",
+            "state_topic": f"{PARSED_BASE}/cleaning_mode",
+            "command_topic": f"{CMD_BASE}/set/cleaning_mode",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "icon": "mdi:broom",
+        },
+        # Speed preset sensors (read from last decoded status when available)
+        "sensor_speed1_rpm": {
+            "component": "sensor",
+            "object_id": "speed1_rpm",
+            "name": "Speed 1 RPM",
+            "state_topic": f"{PARSED_BASE}/speed/1/rpm",
+            "unit_of_measurement": "RPM",
+            "icon": "mdi:fan-speed-1",
+        },
+        "sensor_speed2_rpm": {
+            "component": "sensor",
+            "object_id": "speed2_rpm",
+            "name": "Speed 2 RPM",
+            "state_topic": f"{PARSED_BASE}/speed/2/rpm",
+            "unit_of_measurement": "RPM",
+            "icon": "mdi:fan-speed-2",
+        },
+        "sensor_speed3_rpm": {
+            "component": "sensor",
+            "object_id": "speed3_rpm",
+            "name": "Speed 3 RPM",
+            "state_topic": f"{PARSED_BASE}/speed/3/rpm",
+            "unit_of_measurement": "RPM",
+            "icon": "mdi:fan-speed-3",
+        },
+        "sensor_speed4_rpm": {
+            "component": "sensor",
+            "object_id": "speed4_rpm",
+            "name": "Speed 4 RPM",
+            "state_topic": f"{PARSED_BASE}/speed/4/rpm",
+            "unit_of_measurement": "RPM",
+            "icon": "mdi:fan",
         },
         "button_status": {
             "component": "button",
@@ -289,6 +372,18 @@ def publish_discovery(client):
         logger.info("Published discovery topic %s", topic)
 
 
+def publish_cleaning_mode_state(client):
+    """Publish the current cleaning mode state to MQTT."""
+    with _cleaning_mode_lock:
+        state = _cleaning_mode
+    client.publish(
+        f"{PARSED_BASE}/cleaning_mode",
+        "ON" if state else "OFF",
+        retain=True,
+    )
+    logger.info("Cleaning mode state published: %s", "ON" if state else "OFF")
+
+
 def publish_parsed_status(client, packet, status):
     payload = {
         "timestamp": int(time.time()),
@@ -301,6 +396,7 @@ def publish_parsed_status(client, packet, status):
         "drive_state": status["drive_state"],
         "watts": status["watts"],
         "rpm": status["rpm"],
+        "schedule_enabled": status["schedule_enabled"],
         "timer": {
             "hours": status["timer_hours"],
             "minutes": status["timer_minutes"],
@@ -329,6 +425,51 @@ def publish_parsed_status(client, packet, status):
         json.dumps({"hours": status["clock_hours"], "minutes": status["clock_minutes"]}),
         retain=True,
     )
+
+    # Schedule enabled (derived from run-byte bit 2; None when data unavailable)
+    if status["schedule_enabled"] is not None:
+        client.publish(
+            f"{PARSED_BASE}/schedule_enabled",
+            "ON" if status["schedule_enabled"] else "OFF",
+            retain=True,
+        )
+
+    # Speed preset RPM values: for IntelliFlo VS the current running RPM
+    # correlates to the active speed preset when mode indicates a speed button
+    # is in use.  We publish the live RPM under the active speed slot when the
+    # mode byte identifies a specific preset (mode 0x06 = speed-preset mode).
+    # Slots that are not currently active are published as unknown ("").
+    _maybe_publish_speed_presets(client, status)
+
+
+def _maybe_publish_speed_presets(client, status):
+    """Publish Speed 1–4 RPM topics based on the active drive state.
+
+    Pentair IntelliFlo VS uses the drive_state byte to indicate which speed
+    preset button is currently active:
+      drive_state 1 → Speed 1
+      drive_state 2 → Speed 2
+      drive_state 3 → Speed 3
+      drive_state 4 → Speed 4
+
+    When the pump is actively running on a numbered preset we publish the
+    live RPM to that preset's topic so the HA card shows what each speed
+    button is configured to.  Other slots are left at their last retained
+    value (we do not overwrite them with empty/zero).
+    """
+    rpm = status.get("rpm")
+    drive_state = status.get("drive_state")
+
+    if rpm is None or drive_state is None:
+        return
+
+    if drive_state in (1, 2, 3, 4):
+        client.publish(
+            f"{PARSED_BASE}/speed/{drive_state}/rpm",
+            str(rpm),
+            retain=True,
+        )
+        logger.info("Speed %d RPM updated to %d", drive_state, rpm)
 
 
 def publish_frame(client, frame: bytes, label: str):
@@ -385,6 +526,8 @@ def publish_control_frame(client, frame: bytes, label: str) -> bool:
 
 
 def handle_command(client, topic, payload_text):
+    global _cleaning_mode
+
     topic = topic.strip()
     payload_text = payload_text.strip()
 
@@ -412,6 +555,28 @@ def handle_command(client, topic, payload_text):
             logger.warning("Invalid RPM payload: %s", payload_text)
         return
 
+    if topic == f"{CMD_BASE}/set/cleaning_mode":
+        normalized = payload_text.upper()
+        if normalized in ("ON", "1", "TRUE", "YES"):
+            with _cleaning_mode_lock:
+                _cleaning_mode = True
+            logger.info("Cleaning mode ENABLED — polling suspended")
+            publish_cleaning_mode_state(client)
+        elif normalized in ("OFF", "0", "FALSE", "NO"):
+            with _cleaning_mode_lock:
+                _cleaning_mode = False
+            logger.info(
+                "Cleaning mode DISABLED — resuming polling; triggering immediate refresh"
+            )
+            publish_cleaning_mode_state(client)
+            # Signal the poll loop to poll immediately
+            _poll_now_event.set()
+        else:
+            logger.warning(
+                "Invalid cleaning_mode payload %r; expected ON/OFF", payload_text
+            )
+        return
+
     logger.warning("Unhandled command topic: %s", topic)
 
 
@@ -426,6 +591,12 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
     if ENABLE_DISCOVERY and not discovery_published:
         publish_discovery(client)
         discovery_published = True
+
+    # Publish cleaning mode state on every (re)connect so HA is in sync
+    publish_cleaning_mode_state(client)
+
+    # Trigger an immediate status poll on connect/reconnect
+    _poll_now_event.set()
 
 
 def on_message(client, userdata, msg):
@@ -495,24 +666,45 @@ _hold_logged_expired = False
 
 def autopoll_loop():
     global _hold_logged_expired
+    logger.info(
+        "Auto-poll loop started (interval=%.0fs, cleaning_mode=%s)",
+        STATUS_POLL_INTERVAL,
+        _cleaning_mode,
+    )
     while not stop_event.is_set():
-        if command_client is not None:
-            if CONTROL_MODE == "on_demand":
-                now = time.monotonic()
+        # Wait for the poll interval OR an immediate-poll signal (whichever comes first)
+        _poll_now_event.wait(timeout=STATUS_POLL_INTERVAL)
+        _poll_now_event.clear()
+
+        if command_client is None:
+            continue
+
+        # Respect cleaning mode – skip the poll but keep the loop alive
+        with _cleaning_mode_lock:
+            cleaning = _cleaning_mode
+        if cleaning:
+            logger.info(
+                "AUTO POLL skipped — cleaning mode is enabled; polling suspended"
+            )
+            continue
+
+        if CONTROL_MODE == "on_demand":
+            now = time.monotonic()
+            with _control_lock:
+                hold_until = _hold_until
+                logged = _hold_logged_expired
+            if hold_until > 0 and now >= hold_until and not logged:
+                logger.info(
+                    "CTRL hold window expired; resuming read-only polling"
+                )
                 with _control_lock:
-                    hold_until = _hold_until
-                    logged = _hold_logged_expired
-                if hold_until > 0 and now >= hold_until and not logged:
-                    logger.info(
-                        "CTRL hold window expired; resuming read-only polling"
-                    )
-                    with _control_lock:
-                        _hold_logged_expired = True
-                elif now < hold_until:
-                    with _control_lock:
-                        _hold_logged_expired = False
-            publish_frame(command_client, build_status_request(), "AUTO STATUS")
-        stop_event.wait(STATUS_POLL_INTERVAL)
+                    _hold_logged_expired = True
+            elif now < hold_until:
+                with _control_lock:
+                    _hold_logged_expired = False
+
+        logger.info("AUTO POLL sending status request")
+        publish_frame(command_client, build_status_request(), "AUTO STATUS")
 
 
 def main():
@@ -531,6 +723,7 @@ def main():
         "Status poll mode: %s (interval=%.0fs)",
         STATUS_POLL_MODE, STATUS_POLL_INTERVAL,
     )
+    logger.info("Cleaning mode on startup: %s", "ENABLED" if _cleaning_mode else "DISABLED")
 
     listener_thread = threading.Thread(target=mqtt_listener, daemon=True)
     listener_thread.start()
