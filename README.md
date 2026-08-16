@@ -6,10 +6,13 @@ A Home Assistant custom add-on that bridges a Pentair IntelliFlo/RS-485 pool pum
 
 - Connects to an MQTT broker
 - Sends Pentair RS-485 frames over MQTT transport topics
-- Polls pump status automatically
+- Polls pump status automatically (immediate poll on startup and reconnect)
 - Decodes status responses
 - Publishes parsed values back to MQTT as JSON and scalar topics
 - Accepts MQTT command topics for pump control
+- **Cleaning mode** — pause polling so the physical panel is freely usable during maintenance
+- **Schedule enabled** — read-only sensor showing whether the pump's internal schedule is active
+- **Speed 1–4 preset visibility** — publishes the RPM configured for each speed button
 - Designed for Home Assistant as a custom add-on
 
 ## Repository structure
@@ -58,11 +61,12 @@ ctrl_addr: 33
 pump_addr: 96
 low_rpm: 1650
 high_rpm: 3000
-status_poll_interval_seconds: 15
+status_poll_interval_seconds: 30
 status_poll_mode: active
 control_mode: on_demand
 control_release_seconds: 60
 min_command_interval_seconds: 1.0
+cleaning_mode: false
 ```
 
 ## MQTT topics
@@ -82,6 +86,9 @@ These are configurable in the add-on options.
 - `pentair/pump/status/drive_state`
 - `pentair/pump/status/timer`
 - `pentair/pump/status/clock`
+- `pentair/pump/status/schedule_enabled` — `ON`/`OFF`
+- `pentair/pump/status/cleaning_mode` — `ON`/`OFF`
+- `pentair/pump/status/speed/1/rpm` through `pentair/pump/status/speed/4/rpm`
 
 ### Command topics
 - `pentair/pump/cmd/status`
@@ -89,9 +96,11 @@ These are configurable in the add-on options.
 - `pentair/pump/cmd/low`
 - `pentair/pump/cmd/high`
 - `pentair/pump/cmd/rpm`
+- `pentair/pump/cmd/set/cleaning_mode`
 
 Example:
 - publish `2200` to `pentair/pump/cmd/rpm`
+- publish `ON` to `pentair/pump/cmd/set/cleaning_mode` to suspend polling
 
 ## Control modes
 
@@ -107,7 +116,17 @@ Example:
 | `status_poll_mode: active` | **(default)** Sends an AUTO STATUS frame every `status_poll_interval_seconds`. Provides regular telemetry updates. |
 | `status_poll_mode: passive` | Never sends AUTO STATUS frames. Telemetry updates from uplink frames only. **Preserves local keypad on pumps that lock the display when polled.** |
 
-> **Local keypad tip:** Some Pentair pump firmware versions lock the keypad and show **"Display Not Active"** whenever any RS-485 frame is transmitted by an external device — including routine status polls. If your keypad is locked while the integration is running, set `status_poll_mode: passive`. The local display will remain usable, and telemetry will still publish whenever the pump sends its own uplink frames.
+> **Local keypad tip:** Some Pentair pump firmware versions lock the keypad and show **"Display Not Active"** whenever any RS-485 frame is transmitted by an external device — including routine status polls. If your keypad is locked while the integration is running, set `status_poll_mode: passive` or use **Cleaning Mode** during manual maintenance sessions. For normal operation with less frequent polling, set `status_poll_interval_seconds: 900` (15-minute intervals).
+
+## Cleaning mode
+
+Enable Cleaning Mode to pause all polling and keep the physical pump panel free for manual use:
+
+- Config option: `cleaning_mode: true` (start suspended)
+- MQTT command: publish `ON` to `pentair/pump/cmd/set/cleaning_mode`
+- HA entity: **Cleaning Mode** switch (via MQTT discovery)
+
+When disabled, the bridge immediately polls for fresh status.
 
 See `DOCS.md` in the add-on for full option descriptions.
 
@@ -116,10 +135,4 @@ See `DOCS.md` in the add-on for full option descriptions.
 - This add-on expects an MQTT-connected RS-485 transport such as a USR-DR164 configured to exchange raw Pentair frames.
 - Broker credentials are provided through add-on configuration, not hardcoded in the source.
 - If Home Assistant does not show the repository, confirm the root file is named exactly `repository.yaml`.
-
-## Future improvements
-
-- Home Assistant MQTT Discovery
-- richer pump state decoding
-- diagnostics and health topics
-- optional manual command services
+- Schedule write (enable/disable via command) is not implemented in the current version pending hardware validation.
