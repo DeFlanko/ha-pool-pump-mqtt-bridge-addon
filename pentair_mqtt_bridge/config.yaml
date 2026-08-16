@@ -52,3 +52,12 @@ schema:
   min_command_interval_seconds: float?
   status_poll_mode: str?
   status_poll_interval_seconds: float?
+changelog:
+  "0.2.1": >-
+    On-demand control mode: bridge releases the RS-485 bus after a configurable
+    timeout so the pump keypad becomes usable again.
+    Passive status polling mode (STATUS_POLL_MODE=passive) stops TX AUTO STATUS
+    frames entirely, letting the keypad stay active while still receiving
+    telemetry from uplink frames.
+    Related logging and configuration improvements.
+  "0.2.0": "Initial on-demand control mode and MQTT bridge release."
