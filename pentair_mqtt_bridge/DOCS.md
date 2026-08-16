@@ -43,9 +43,11 @@ parsed_base: pentair/pump/status
 cmd_base: pentair/pump/cmd
 ctrl_addr: 33
 pump_addr: 96
-low_rpm: 1650
-high_rpm: 3000
-status_poll_interval_seconds: 30
+speed1_rpm: 1650
+speed2_rpm: 2000
+speed3_rpm: 2500
+speed4_rpm: 3450
+status_poll_interval_seconds: 900
 status_poll_mode: active
 control_mode: on_demand
 control_release_seconds: 60
@@ -109,18 +111,35 @@ Default:
 96
 ```
 
-#### `low_rpm`
-RPM used when sending the `low` command.
+#### `speed1_rpm`
+RPM used when pressing the **Speed 1** button (or sending to `cmd_base/speed/1`).
 
-#### `high_rpm`
-RPM used when sending the `high` command.
+Default: `1650`
+
+#### `speed2_rpm`
+RPM used when pressing the **Speed 2** button (or sending to `cmd_base/speed/2`).
+
+Default: `2000`
+
+#### `speed3_rpm`
+RPM used when pressing the **Speed 3** button (or sending to `cmd_base/speed/3`).
+
+Default: `2500`
+
+#### `speed4_rpm`
+RPM used when pressing the **Speed 4** button (or sending to `cmd_base/speed/4`).
+
+Default: `3450`
+
+#### `low_rpm` / `high_rpm`
+Legacy RPM values kept for backward compatibility with the `cmd_base/low` and `cmd_base/high` topics. New installs should use `speed1_rpm`–`speed4_rpm` instead.
 
 #### `status_poll_interval_seconds`
 How often the add-on polls the pump for status when `status_poll_mode` is `active`, in seconds.
 
-Default: `30`
+Default: `900` (15 minutes)
 
-> **Panel lock tip:** If you observe the pump display showing **"Display Not Active"** during normal automation use, increase this value significantly (e.g., `900` for 15-minute intervals) or switch to `cleaning_mode` during manual maintenance sessions.
+> **Panel lock tip:** Polling too frequently causes the pump display to show **"Display Not Active"** and prevents manual keypad operation. The default 15-minute interval is a good balance. Use **cleaning mode** during manual maintenance sessions to suspend polling entirely.
 
 ---
 
@@ -176,7 +195,7 @@ If an invalid value is supplied, the bridge falls back to `active` and logs a wa
 
 How often (in seconds) the bridge sends an AUTO STATUS poll to the pump when `status_poll_mode` is `active`.
 
-Default: `30`
+Default: `900` (15 minutes)
 
 Has no effect when `status_poll_mode` is `passive`.
 
@@ -262,10 +281,14 @@ The add-on listens on:
 
 - `pentair/pump/cmd/status`
 - `pentair/pump/cmd/off`
-- `pentair/pump/cmd/low`
-- `pentair/pump/cmd/high`
+- `pentair/pump/cmd/speed/1`
+- `pentair/pump/cmd/speed/2`
+- `pentair/pump/cmd/speed/3`
+- `pentair/pump/cmd/speed/4`
 - `pentair/pump/cmd/rpm`
 - `pentair/pump/cmd/set/cleaning_mode`
+- `pentair/pump/cmd/low` *(backward-compatible alias → Speed 1 RPM)*
+- `pentair/pump/cmd/high` *(backward-compatible alias → Speed 4 RPM)*
 
 If you change `cmd_base`, these topic paths will change accordingly.
 
@@ -281,14 +304,24 @@ Turn pump off:
 - Topic: `pentair/pump/cmd/off`
 - Payload: `1`
 
-Set low speed:
+Set Speed 1:
 
-- Topic: `pentair/pump/cmd/low`
+- Topic: `pentair/pump/cmd/speed/1`
 - Payload: `1`
 
-Set high speed:
+Set Speed 2:
 
-- Topic: `pentair/pump/cmd/high`
+- Topic: `pentair/pump/cmd/speed/2`
+- Payload: `1`
+
+Set Speed 3:
+
+- Topic: `pentair/pump/cmd/speed/3`
+- Payload: `1`
+
+Set Speed 4:
+
+- Topic: `pentair/pump/cmd/speed/4`
 - Payload: `1`
 
 Set a specific RPM:

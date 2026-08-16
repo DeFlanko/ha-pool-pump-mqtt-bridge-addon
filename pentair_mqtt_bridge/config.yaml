@@ -1,5 +1,5 @@
 name: "Pentair MQTT Bridge"
-version: "0.3.0"
+version: "0.4.0"
 slug: "pentair_mqtt_bridge"
 description: "Bridge a Pentair pool pump over MQTT, decode status, and publish control/state topics."
 url: "https://github.com/DeFlanko/ha-pool-pump-mqtt-bridge-addon"
@@ -21,15 +21,19 @@ options:
   discovery_prefix: "pentair_pump"
   ctrl_addr: 33
   pump_addr: 96
-  low_rpm: 1600
+  low_rpm: 1650
   high_rpm: 3450
-  status_poll_interval: 30
+  speed1_rpm: 1650
+  speed2_rpm: 2000
+  speed3_rpm: 2500
+  speed4_rpm: 3450
+  status_poll_interval: 900
   enable_discovery: true
   control_mode: "on_demand"
   control_release_seconds: 60
   min_command_interval_seconds: 1.0
   status_poll_mode: "active"
-  status_poll_interval_seconds: 30
+  status_poll_interval_seconds: 900
   cleaning_mode: false
 schema:
   broker: str
@@ -46,6 +50,10 @@ schema:
   pump_addr: int
   low_rpm: int
   high_rpm: int
+  speed1_rpm: int?
+  speed2_rpm: int?
+  speed3_rpm: int?
+  speed4_rpm: int?
   status_poll_interval: int
   enable_discovery: bool
   control_mode: str?
@@ -55,6 +63,19 @@ schema:
   status_poll_interval_seconds: float?
   cleaning_mode: bool?
 changelog:
+  "0.4.0": >-
+    Pump Off fix: reworked off command to use action 0x06 with payload 03 21 00 00
+    (stop/program-0) per the Pentair packet spec, replacing the previous no-op payload.
+    Polling default: status_poll_interval_seconds now defaults to 900 s (15 minutes)
+    to reduce RS-485 bus traffic and avoid locking the pump display.
+    Speed 1-4 controls: replaced Pump Low / Pump High discovery buttons with
+    four configurable Speed 1-4 buttons (cmd_base/speed/1-4); RPM for each slot
+    is set via speed1_rpm-speed4_rpm config options. Low/high topics remain as
+    backward-compatible aliases.
+    Improved decoder: Pump Mode and Pump Drive State now publish human-readable
+    labels (e.g. "Feature 1", "Speed 2", "Stopped") in addition to raw values.
+    Schedule enabled now correctly reads bit 2 (0x04) of the run byte.
+    Device sw_version bumped to 0.4.0.
   "0.3.0": >-
     Polling enhancements: configurable interval (status_poll_interval_seconds,
     default 30s), immediate poll on startup and MQTT reconnect, and an

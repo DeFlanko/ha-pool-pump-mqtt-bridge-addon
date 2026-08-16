@@ -2,7 +2,29 @@
 
 All notable changes to the Pentair MQTT Bridge add-on are documented here.
 
-## [0.3.0]
+## [0.4.0]
+
+### Pump Off fix
+- Reworked `build_off_request()` to use action `0x06` with data `03 21 00 00` (stop / program 0), matching the Pentair packet spec stop sequence. The previous payload had no effect on the pump.
+
+### 15-minute polling default
+- Default `status_poll_interval_seconds` changed from **30 s** to **900 s** (15 minutes) to reduce RS-485 bus traffic and avoid locking the pump display during normal use.
+- Cleaning mode still suspends polling entirely; disabling cleaning mode still triggers an immediate refresh.
+
+### Speed 1–4 controls (replaces Pump Low / Pump High)
+- MQTT discovery now registers **Speed 1**, **Speed 2**, **Speed 3**, and **Speed 4** button entities instead of the previous Pump Low / Pump High buttons.
+- Each speed button has a dedicated command topic: `pentair/pump/cmd/speed/1` through `pentair/pump/cmd/speed/4`.
+- RPM for each slot is configured via `speed1_rpm`, `speed2_rpm`, `speed3_rpm`, `speed4_rpm` options (defaults: 1100, 1650, 2200, 3000).
+- The legacy `pentair/pump/cmd/low` and `pentair/pump/cmd/high` topics remain as backward-compatible aliases (low → Speed 1 RPM, high → Speed 4 RPM).
+
+### Improved status decoder
+- `Pump Mode` topic now publishes a human-readable label (e.g., `Manual`, `Feature 1`, `External`) instead of a raw byte value. The raw byte is still available in the JSON payload.
+- `Pump Drive State` topic now publishes a label such as `Speed 1` through `Speed 4` or `Stopped` instead of a raw byte. Raw byte remains in JSON.
+- `Pump Schedule Enabled` correctly reads bit 2 (`0x04`) of the run byte.
+- `run_active` (bool) and label fields added to the JSON status payload.
+
+### Other
+- Device `sw_version` bumped to `0.4.0`.
 
 ### Polling enhancements
 - Default `status_poll_interval_seconds` raised to **30 s** (was 15 s) to reduce bus contention on most installations.
