@@ -9,6 +9,14 @@ import paho.mqtt.client as mqtt
 
 
 
+def initialize_local_timezone():
+    if hasattr(time, "tzset"):
+        time.tzset()
+
+
+initialize_local_timezone()
+
+
 class LocalTimezoneFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
         return datetime.fromtimestamp(record.created).astimezone().isoformat(
