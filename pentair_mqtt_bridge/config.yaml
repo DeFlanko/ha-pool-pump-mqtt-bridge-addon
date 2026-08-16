@@ -1,5 +1,5 @@
 name: "Pentair MQTT Bridge"
-version: "0.4.0"
+version: "0.4.1"
 slug: "pentair_mqtt_bridge"
 description: "Bridge a Pentair pool pump over MQTT, decode status, and publish control/state topics."
 url: "https://github.com/DeFlanko/ha-pool-pump-mqtt-bridge-addon"
@@ -8,17 +8,19 @@ boot: auto
 init: false
 arch:
   - amd64
-options:
+MQTT Settings:
   broker: ""
   port: 1883
   username: ""
   password: ""
+MQTT Topics:
   topic_up: "D4AD20CF144A/up"
   topic_down: "D4AD20CF144A/down"
   parsed_base: "pentair/pump/status"
   cmd_base: "pentair/pump/cmd"
   discovery_base: "homeassistant"
   discovery_prefix: "pentair_pump"
+Pool Pump Settings:
   ctrl_addr: 33
   pump_addr: 96
   low_rpm: 1650
@@ -27,14 +29,15 @@ options:
   speed2_rpm: 2000
   speed3_rpm: 2500
   speed4_rpm: 3450
-  status_poll_interval: 900
+Pool Pump Controls:
   enable_discovery: true
+  cleaning_mode: false
+  status_poll_mode: "active"
+  status_poll_interval: 900
   control_mode: "on_demand"
   control_release_seconds: 60
   min_command_interval_seconds: 1.0
-  status_poll_mode: "active"
   status_poll_interval_seconds: 900
-  cleaning_mode: false
 schema:
   broker: str
   port: port
@@ -63,6 +66,8 @@ schema:
   status_poll_interval_seconds: float?
   cleaning_mode: bool?
 changelog:
+  "0.4.1": >-
+    Orangize the Config menu
   "0.4.0": >-
     Pump Off fix: reworked off command to use action 0x06 with payload 03 21 00 00
     (stop/program-0) per the Pentair packet spec, replacing the previous no-op payload.
