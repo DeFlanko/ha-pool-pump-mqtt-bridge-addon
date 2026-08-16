@@ -1,12 +1,24 @@
 import hashlib
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timedelta
 
 import paho.mqtt.client as mqtt
 
+
+
+def initialize_local_timezone():
+    tz = os.environ.get("TZ")
+    if tz:
+        os.environ["TZ"] = tz
+    if hasattr(time, "tzset"):
+        time.tzset()
+
+
+initialize_local_timezone()
 
 
 class LocalTimezoneFormatter(logging.Formatter):
