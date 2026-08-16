@@ -14,6 +14,7 @@ A Home Assistant custom add-on that bridges a Pentair IntelliFlo/RS-485 pool pum
 - **Schedule enabled** — read-only sensor showing whether the pump's internal schedule is active
 - **Speed 1–4 preset visibility** — publishes the RPM configured for each speed button
 - **Last poll telemetry** — publishes the last active poll refresh time as local ISO-8601 and Unix epoch
+- **Energy consumption** — cumulative kWh sensor for the Home Assistant Energy Dashboard
 - Designed for Home Assistant as a custom add-on
 
 ## Repository structure
@@ -89,6 +90,7 @@ These are configurable in the add-on options.
 - `pentair/pump/status/cleaning_mode` — `ON`/`OFF`
 - `pentair/pump/status/last_poll_epoch`
 - `pentair/pump/status/last_poll_local`
+- `pentair/pump/status/energy_kwh`
 - `pentair/pump/status/speed/1/rpm` through `pentair/pump/status/speed/4/rpm`
 
 ### Command topics
@@ -120,6 +122,19 @@ Example:
 - `pentair/pump/status/last_poll_local` — local timezone ISO-8601 timestamp, for example `2026-08-16T14:22:31-04:00`
 - When MQTT discovery is enabled, Home Assistant gets diagnostic sensors for both values, including a timestamp sensor for `last_poll_local`
 - Add-on log timestamps now use the detected local timezone, and startup logs include the timezone / UTC offset for quick verification
+
+## Energy Dashboard integration
+
+The add-on publishes two sensors that map to the Home Assistant **Energy Dashboard** device fields:
+
+| HA Energy field | Sensor entity | MQTT topic | Unit |
+|---|---|---|---|
+| Device power consumption | Pump Power | `<parsed_base>/watts` | W |
+| Device energy consumption | Pump Energy | `<parsed_base>/energy_kwh` | kWh |
+
+The **Pump Energy** sensor accumulates kWh by integrating the reported watt values over time. It is configured with `state_class: total_increasing` so Home Assistant long-term statistics treat it as a cumulative energy counter.
+
+The counter is persisted in `/data/energy_kwh.json` so it survives add-on restarts. If the file is absent (first install), the counter starts at zero.
 
 ## Cleaning mode
 

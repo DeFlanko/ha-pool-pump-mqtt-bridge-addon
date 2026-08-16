@@ -2,7 +2,18 @@
 
 All notable changes to the Pentair MQTT Bridge add-on are documented here.
 
-## [0.5.0]
+## [0.6.0]
+
+### Energy consumption sensor
+
+- Added **Pump Energy** sensor (`<parsed_base>/energy_kwh`) that accumulates cumulative kWh from watt telemetry samples using time-delta integration.
+- MQTT discovery registers the sensor with `device_class: energy`, `state_class: total_increasing`, and `unit_of_measurement: kWh` so it can be selected in the **Home Assistant Energy Dashboard** under **Device energy consumption**.
+- The existing **Pump Power** sensor (`<parsed_base>/watts`, unit `W`, `device_class: power`, `state_class: measurement`) remains unchanged and is suitable for **Device power consumption**.
+- Cumulative kWh is persisted across add-on restarts in `/data/energy_kwh.json` so the counter is not reset on every restart.
+- Negative deltas, duplicate timestamps, and invalid watt values are silently ignored to preserve the monotonic `total_increasing` constraint required by Home Assistant statistics.
+- `energy_kwh` field also included in the `<parsed_base>/json` payload.
+- Device `sw_version` bumped to `0.6.0`.
+
 
 ### Configuration simplification
 - Removed user-facing `control_mode`, `status_poll_mode`, `status_poll_interval_seconds`, and legacy `status_poll_interval` settings.

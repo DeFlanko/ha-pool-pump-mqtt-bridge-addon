@@ -1,5 +1,5 @@
 name: "Pentair MQTT Bridge"
-version: "0.5.0"
+version: "0.6.0"
 slug: "pentair_mqtt_bridge"
 description: "Bridge a Pentair pool pump over MQTT, decode status, and publish control/state topics."
 url: "https://github.com/DeFlanko/ha-pool-pump-mqtt-bridge-addon"
@@ -60,6 +60,14 @@ schema:
   min_command_interval_seconds: float?
   cleaning_mode: bool?
 changelog:
+  "0.6.0": >-
+    Added cumulative energy sensor (kWh) derived from watt telemetry.
+    Publishes to <parsed_base>/energy_kwh with MQTT discovery metadata
+    (device_class: energy, state_class: total_increasing, unit: kWh) so the
+    pump can be added to the Home Assistant Energy Dashboard under Device
+    energy consumption. Energy is accumulated by integrating watt samples over
+    time, is monotonically increasing, and is persisted across restarts in
+    /data/energy_kwh.json. Existing power sensor (W) is unchanged.
   "0.5.0": >-
     Simplified configuration: control mode is now always on-demand and startup
     polling is always active for 5 seconds before returning to passive mode.
