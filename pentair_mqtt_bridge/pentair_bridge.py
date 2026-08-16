@@ -672,9 +672,23 @@ def autopoll_loop():
         _cleaning_mode,
     )
     while not stop_event.is_set():
-        # Wait for the poll interval OR an immediate-poll signal (whichever comes first)
-        _poll_now_event.wait(timeout=STATUS_POLL_INTERVAL)
+        # Wait for the poll interval OR an immediate-poll signal (whichever comes first).
+        # _poll_now_event.wait() does not respond to stop_event, so we cap it at 1 s
+        # slices and re-check the stop flag, ensuring clean shutdown without
+        # waiting a full STATUS_POLL_INTERVAL.
+        deadline = time.monotonic() + STATUS_POLL_INTERVAL
+        while not stop_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            triggered = _poll_now_event.wait(timeout=min(remaining, 1.0))
+            if triggered:
+                break
+
         _poll_now_event.clear()
+
+        if stop_event.is_set():
+            break
 
         if command_client is None:
             continue
