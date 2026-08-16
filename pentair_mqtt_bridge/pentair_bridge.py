@@ -515,19 +515,26 @@ def publish_last_poll_state(client, when: datetime | None = None):
     if when is None:
         when = local_now()
 
-    _last_poll_epoch = int(when.timestamp())
-    _last_poll_local = when.isoformat(timespec="seconds")
+    with _poll_state_lock:
+        _last_poll_epoch = int(when.timestamp())
+        _last_poll_local = when.isoformat(timespec="seconds")
+        last_poll_epoch = _last_poll_epoch
+        last_poll_local = _last_poll_local
 
-    client.publish(f"{PARSED_BASE}/last_poll_epoch", str(_last_poll_epoch), retain=True)
-    client.publish(f"{PARSED_BASE}/last_poll_local", _last_poll_local, retain=True)
+    client.publish(f"{PARSED_BASE}/last_poll_epoch", str(last_poll_epoch), retain=True)
+    client.publish(f"{PARSED_BASE}/last_poll_local", last_poll_local, retain=True)
     logger.info(
         "Poll refresh telemetry published epoch=%s local=%s",
-        _last_poll_epoch,
-        _last_poll_local,
+        last_poll_epoch,
+        last_poll_local,
     )
 
 
 def publish_parsed_status(client, packet, status):
+    with _poll_state_lock:
+        last_poll_epoch = _last_poll_epoch
+        last_poll_local = _last_poll_local
+
     payload = {
         "timestamp": int(time.time()),
         "timestamp_local": local_now().isoformat(timespec="seconds"),
@@ -552,8 +559,8 @@ def publish_parsed_status(client, packet, status):
             "hours": status["clock_hours"],
             "minutes": status["clock_minutes"],
         },
-        "last_poll_epoch": _last_poll_epoch,
-        "last_poll_local": _last_poll_local,
+        "last_poll_epoch": last_poll_epoch,
+        "last_poll_local": last_poll_local,
         "raw_data_hex": status["raw_data_hex"],
         "raw_packet_hex": hex_dump(packet["raw"]),
     }
@@ -836,9 +843,10 @@ _hold_logged_expired = False
 
 
 def activate_polling_window(reason: str, *, immediate: bool):
+    global _active_poll_until, _next_poll_due
+
     now = time.monotonic()
     with _poll_state_lock:
-        global _active_poll_until, _next_poll_due
         _active_poll_until = max(_active_poll_until, now + ACTIVE_POLL_TIMEOUT_SECONDS)
         if immediate or _next_poll_due <= 0:
             _next_poll_due = now
@@ -850,7 +858,7 @@ def activate_polling_window(reason: str, *, immediate: bool):
 
 
 def autopoll_loop():
-    global _hold_logged_expired
+    global _hold_logged_expired, _active_poll_until, _next_poll_due
     logger.info(
         "Auto-poll loop started (cadence=%s, active_window=%.0fs, cleaning_mode=%s)",
         (
@@ -866,12 +874,10 @@ def autopoll_loop():
     pending_immediate = True
     while not stop_event.is_set():
         if pending_immediate:
-            triggered = True
             refresh_requested = False
             pending_immediate = False
         else:
             refresh_requested = _poll_now_event.wait(timeout=1.0)
-            triggered = refresh_requested
 
         if refresh_requested:
             _poll_now_event.clear()
@@ -909,9 +915,7 @@ def autopoll_loop():
             elif now < hold_until:
                 with _control_lock:
                     _hold_logged_expired = False
-
         with _poll_state_lock:
-            global _active_poll_until, _next_poll_due
             if POLL_INTERVAL_SECONDS > 0 and _next_poll_due > 0 and now >= _next_poll_due:
                 _active_poll_until = max(
                     _active_poll_until,
