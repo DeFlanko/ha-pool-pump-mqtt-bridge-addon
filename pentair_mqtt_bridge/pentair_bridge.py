@@ -38,10 +38,10 @@ ENABLE_DISCOVERY = bool(OPTIONS.get("enable_discovery", True))
 CTRL_ADDR = int(OPTIONS.get("ctrl_addr", 33))
 PUMP_ADDR = int(OPTIONS.get("pump_addr", 96))
 
-SPEED1_RPM = int(OPTIONS.get("speed1_rpm", OPTIONS.get("low_rpm", 1100)))
-SPEED2_RPM = int(OPTIONS.get("speed2_rpm", 1650))
-SPEED3_RPM = int(OPTIONS.get("speed3_rpm", 2200))
-SPEED4_RPM = int(OPTIONS.get("speed4_rpm", OPTIONS.get("high_rpm", 3000)))
+SPEED1_RPM = int(OPTIONS.get("speed1_rpm", OPTIONS.get("low_rpm", 1650)))
+SPEED2_RPM = int(OPTIONS.get("speed2_rpm", 2000))
+SPEED3_RPM = int(OPTIONS.get("speed3_rpm", 2500))
+SPEED4_RPM = int(OPTIONS.get("speed4_rpm", OPTIONS.get("high_rpm", 3450)))
 DEFAULT_TARGET_RPM = 1650
 
 _raw_control_mode = OPTIONS.get("control_mode", "on_demand")

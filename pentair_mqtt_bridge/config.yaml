@@ -21,12 +21,12 @@ options:
   discovery_prefix: "pentair_pump"
   ctrl_addr: 33
   pump_addr: 96
-  low_rpm: 1100
-  high_rpm: 3000
-  speed1_rpm: 1100
-  speed2_rpm: 1650
-  speed3_rpm: 2200
-  speed4_rpm: 3000
+  low_rpm: 1650
+  high_rpm: 3450
+  speed1_rpm: 1650
+  speed2_rpm: 2000
+  speed3_rpm: 2500
+  speed4_rpm: 3450
   status_poll_interval: 900
   enable_discovery: true
   control_mode: "on_demand"

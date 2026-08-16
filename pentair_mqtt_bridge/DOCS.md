@@ -43,10 +43,10 @@ parsed_base: pentair/pump/status
 cmd_base: pentair/pump/cmd
 ctrl_addr: 33
 pump_addr: 96
-speed1_rpm: 1100
-speed2_rpm: 1650
-speed3_rpm: 2200
-speed4_rpm: 3000
+speed1_rpm: 1650
+speed2_rpm: 2000
+speed3_rpm: 2500
+speed4_rpm: 3450
 status_poll_interval_seconds: 900
 status_poll_mode: active
 control_mode: on_demand
@@ -114,22 +114,22 @@ Default:
 #### `speed1_rpm`
 RPM used when pressing the **Speed 1** button (or sending to `cmd_base/speed/1`).
 
-Default: `1100`
+Default: `1650`
 
 #### `speed2_rpm`
 RPM used when pressing the **Speed 2** button (or sending to `cmd_base/speed/2`).
 
-Default: `1650`
+Default: `2000`
 
 #### `speed3_rpm`
 RPM used when pressing the **Speed 3** button (or sending to `cmd_base/speed/3`).
 
-Default: `2200`
+Default: `2500`
 
 #### `speed4_rpm`
 RPM used when pressing the **Speed 4** button (or sending to `cmd_base/speed/4`).
 
-Default: `3000`
+Default: `3450`
 
 #### `low_rpm` / `high_rpm`
 Legacy RPM values kept for backward compatibility with the `cmd_base/low` and `cmd_base/high` topics. New installs should use `speed1_rpm`–`speed4_rpm` instead.
