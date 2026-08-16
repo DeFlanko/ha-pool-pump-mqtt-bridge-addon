@@ -38,8 +38,10 @@ ENABLE_DISCOVERY = bool(OPTIONS.get("enable_discovery", True))
 CTRL_ADDR = int(OPTIONS.get("ctrl_addr", 33))
 PUMP_ADDR = int(OPTIONS.get("pump_addr", 96))
 
-LOW_RPM = int(OPTIONS.get("low_rpm", 1650))
-HIGH_RPM = int(OPTIONS.get("high_rpm", 3000))
+SPEED1_RPM = int(OPTIONS.get("speed1_rpm", OPTIONS.get("low_rpm", 1100)))
+SPEED2_RPM = int(OPTIONS.get("speed2_rpm", 1650))
+SPEED3_RPM = int(OPTIONS.get("speed3_rpm", 2200))
+SPEED4_RPM = int(OPTIONS.get("speed4_rpm", OPTIONS.get("high_rpm", 3000)))
 DEFAULT_TARGET_RPM = 1650
 
 _raw_control_mode = OPTIONS.get("control_mode", "on_demand")
@@ -66,7 +68,7 @@ STATUS_POLL_MODE = _raw_poll_mode
 STATUS_POLL_INTERVAL = float(
     OPTIONS.get(
         "status_poll_interval_seconds",
-        OPTIONS.get("status_poll_interval", 30),
+        OPTIONS.get("status_poll_interval", 900),
     )
 )
 
@@ -119,8 +121,10 @@ def build_set_rpm_request(rpm: int) -> bytes:
 
 
 def build_off_request() -> bytes:
-    data = bytes([0x00, 0x00, 0x00])
-    return pentair_frame(PUMP_ADDR, CTRL_ADDR, 0x01, data)
+    # Per the Pentair packet spec, program-control command 0x06 with data
+    # 03 21 00 00 stops the pump (program 0 / stop).
+    data = bytes([0x03, 0x21, 0x00, 0x00])
+    return pentair_frame(PUMP_ADDR, CTRL_ADDR, 0x06, data)
 
 
 def parse_pentair_packet(payload: bytes):
@@ -162,7 +166,7 @@ def decode_status_data(data: bytes):
     Byte layout (indices are 0-based within the data field):
       0      run / status flags
       1      mode
-      2      drive state
+      2      drive state (PMP byte; 1-4 = speed preset slot)
       3-4    watts (big-endian)
       5-6    rpm (big-endian)
       7      timer hours
@@ -171,12 +175,31 @@ def decode_status_data(data: bytes):
       10     clock minutes
 
     Bits in byte 0 (run byte):
+      bit 0  (0x01)  – pump is running
       bit 2  (0x04)  – schedule is currently enabled/active
+
+    Mode byte (best-effort mapping from known IntelliFlo values):
+      0x00 = Manual
+      0x06 = Feature 1 / Speed Preset
+      0x09 = External (Automation)
+
+    Drive state byte — active speed preset slot (1-4) or 0 when not running
+    on a preset.
     """
+    # Named labels for the mode byte (best-effort; model-dependent)
+    MODE_LABELS = {
+        0x00: "Manual",
+        0x06: "Feature 1",
+        0x09: "External",
+    }
+
     out = {
         "run": None,
+        "run_active": None,
         "mode": None,
+        "mode_label": None,
         "drive_state": None,
+        "drive_state_label": None,
         "watts": None,
         "rpm": None,
         "timer_hours": None,
@@ -189,9 +212,20 @@ def decode_status_data(data: bytes):
     }
 
     if len(data) >= 11:
-        out["run"] = data[0]
-        out["mode"] = data[1]
-        out["drive_state"] = data[2]
+        run_byte = data[0]
+        mode_byte = data[1]
+        drive_byte = data[2]
+
+        out["run"] = run_byte
+        out["run_active"] = bool(run_byte & 0x01)
+        out["mode"] = mode_byte
+        out["mode_label"] = MODE_LABELS.get(mode_byte, f"0x{mode_byte:02X}")
+        out["drive_state"] = drive_byte
+        out["drive_state_label"] = (
+            f"Speed {drive_byte}" if 1 <= drive_byte <= 4 else (
+                "Stopped" if drive_byte == 0 else f"0x{drive_byte:02X}"
+            )
+        )
         out["watts"] = (data[3] << 8) | data[4]
         out["rpm"] = (data[5] << 8) | data[6]
         out["timer_hours"] = data[7]
@@ -199,7 +233,7 @@ def decode_status_data(data: bytes):
         out["clock_hours"] = data[9]
         out["clock_minutes"] = data[10]
         # Bit 2 of the run byte indicates schedule-running state
-        out["schedule_enabled"] = bool(data[0] & 0x04)
+        out["schedule_enabled"] = bool(run_byte & 0x04)
 
     return out
 
@@ -210,7 +244,7 @@ def device_block():
         "name": DEVICE_NAME,
         "manufacturer": "Pentair",
         "model": "MQTT RS-485 Bridge",
-        "sw_version": "0.3.0",
+        "sw_version": "0.4.0",
     }
 
 
@@ -325,21 +359,37 @@ def publish_discovery(client):
             "payload_press": "1",
             "icon": "mdi:stop-circle",
         },
-        "button_low": {
+        "button_speed1": {
             "component": "button",
-            "object_id": "low",
-            "name": "Pump Low",
-            "command_topic": f"{CMD_BASE}/low",
+            "object_id": "speed1",
+            "name": "Speed 1",
+            "command_topic": f"{CMD_BASE}/speed/1",
             "payload_press": "1",
             "icon": "mdi:fan-speed-1",
         },
-        "button_high": {
+        "button_speed2": {
             "component": "button",
-            "object_id": "high",
-            "name": "Pump High",
-            "command_topic": f"{CMD_BASE}/high",
+            "object_id": "speed2",
+            "name": "Speed 2",
+            "command_topic": f"{CMD_BASE}/speed/2",
+            "payload_press": "1",
+            "icon": "mdi:fan-speed-2",
+        },
+        "button_speed3": {
+            "component": "button",
+            "object_id": "speed3",
+            "name": "Speed 3",
+            "command_topic": f"{CMD_BASE}/speed/3",
             "payload_press": "1",
             "icon": "mdi:fan-speed-3",
+        },
+        "button_speed4": {
+            "component": "button",
+            "object_id": "speed4",
+            "name": "Speed 4",
+            "command_topic": f"{CMD_BASE}/speed/4",
+            "payload_press": "1",
+            "icon": "mdi:fan",
         },
         "number_rpm_target": {
             "component": "number",
@@ -392,8 +442,11 @@ def publish_parsed_status(client, packet, status):
         "action": f"0x{packet['action']:02X}",
         "checksum_ok": packet["checksum_ok"],
         "run": status["run"],
+        "run_active": status["run_active"],
         "mode": status["mode"],
+        "mode_label": status["mode_label"],
         "drive_state": status["drive_state"],
+        "drive_state_label": status["drive_state_label"],
         "watts": status["watts"],
         "rpm": status["rpm"],
         "schedule_enabled": status["schedule_enabled"],
@@ -413,8 +466,8 @@ def publish_parsed_status(client, packet, status):
     client.publish(f"{PARSED_BASE}/rpm", str(status["rpm"]), retain=True)
     client.publish(f"{PARSED_BASE}/watts", str(status["watts"]), retain=True)
     client.publish(f"{PARSED_BASE}/run", str(status["run"]), retain=True)
-    client.publish(f"{PARSED_BASE}/mode", str(status["mode"]), retain=True)
-    client.publish(f"{PARSED_BASE}/drive_state", str(status["drive_state"]), retain=True)
+    client.publish(f"{PARSED_BASE}/mode", status["mode_label"] or str(status["mode"]), retain=True)
+    client.publish(f"{PARSED_BASE}/drive_state", status["drive_state_label"] or str(status["drive_state"]), retain=True)
     client.publish(
         f"{PARSED_BASE}/timer",
         json.dumps({"hours": status["timer_hours"], "minutes": status["timer_minutes"]}),
@@ -539,12 +592,29 @@ def handle_command(client, topic, payload_text):
         publish_control_frame(client, build_off_request(), "CMD OFF")
         return
 
+    if topic == f"{CMD_BASE}/speed/1":
+        publish_control_frame(client, build_set_rpm_request(SPEED1_RPM), "CMD SPEED1")
+        return
+
+    if topic == f"{CMD_BASE}/speed/2":
+        publish_control_frame(client, build_set_rpm_request(SPEED2_RPM), "CMD SPEED2")
+        return
+
+    if topic == f"{CMD_BASE}/speed/3":
+        publish_control_frame(client, build_set_rpm_request(SPEED3_RPM), "CMD SPEED3")
+        return
+
+    if topic == f"{CMD_BASE}/speed/4":
+        publish_control_frame(client, build_set_rpm_request(SPEED4_RPM), "CMD SPEED4")
+        return
+
+    # Backward-compatible aliases (low → speed1, high → speed4)
     if topic == f"{CMD_BASE}/low":
-        publish_control_frame(client, build_set_rpm_request(LOW_RPM), "CMD LOW")
+        publish_control_frame(client, build_set_rpm_request(SPEED1_RPM), "CMD LOW (alias speed1)")
         return
 
     if topic == f"{CMD_BASE}/high":
-        publish_control_frame(client, build_set_rpm_request(HIGH_RPM), "CMD HIGH")
+        publish_control_frame(client, build_set_rpm_request(SPEED4_RPM), "CMD HIGH (alias speed4)")
         return
 
     if topic == f"{CMD_BASE}/rpm":
