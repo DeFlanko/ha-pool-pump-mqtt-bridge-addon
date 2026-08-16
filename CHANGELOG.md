@@ -2,6 +2,10 @@
 
 All notable changes to the Pentair MQTT Bridge add-on are documented here.
 
+## [0.2.2]
+
+- Default target RPM for new/default installs is now `1650` instead of `2000`.
+
 ## [0.2.1]
 
 - **On-demand control mode improvements**: the bridge now releases the RS-485

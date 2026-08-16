@@ -1,5 +1,5 @@
 name: "Pentair MQTT Bridge"
-version: "0.2.1"
+version: "0.2.2"
 slug: "pentair_mqtt_bridge"
 description: "Bridge a Pentair pool pump over MQTT, decode status, and publish control/state topics."
 url: "https://github.com/DeFlanko/ha-pool-pump-mqtt-bridge-addon"
@@ -53,6 +53,7 @@ schema:
   status_poll_mode: str?
   status_poll_interval_seconds: float?
 changelog:
+  "0.2.2": "Default target RPM for new/default installs is now 1650 instead of 2000."
   "0.2.1": >-
     On-demand control mode: bridge releases the RS-485 bus after a configurable
     timeout so the pump keypad becomes usable again.
