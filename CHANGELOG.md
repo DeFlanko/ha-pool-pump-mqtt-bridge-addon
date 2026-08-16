@@ -2,6 +2,25 @@
 
 All notable changes to the Pentair MQTT Bridge add-on are documented here.
 
+## [0.5.0]
+
+### Configuration simplification
+- Removed user-facing `control_mode`, `status_poll_mode`, `status_poll_interval_seconds`, and legacy `status_poll_interval` settings.
+- Added `poll_interval_minutes` as the only polling cadence option. Default is `15`; `0` means continuous polling while an active refresh window is running.
+- Existing stored configs that still contain the removed options are accepted, but the bridge now logs that those settings are deprecated and ignored.
+
+### Polling behavior
+- Control mode is now always **on-demand** internally.
+- Status polling now starts in **ACTIVE** mode and automatically switches to **PASSIVE** mode after 5 seconds.
+- The bridge does not transmit `AUTO STATUS` poll frames while passive.
+- Reconnects and cleaning-mode disable events trigger an immediate active refresh window.
+
+### Observability
+- Log timestamps are now emitted as local timezone-aware ISO-8601 values.
+- Startup logging now reports the detected local timezone / UTC offset for verification.
+- Added last poll telemetry topics: `<parsed_base>/last_poll_epoch` and `<parsed_base>/last_poll_local`.
+- MQTT discovery now registers diagnostic sensors for the last poll timestamp and epoch values.
+
 ## [0.4.0]
 
 ### Pump Off fix

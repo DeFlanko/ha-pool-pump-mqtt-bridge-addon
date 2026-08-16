@@ -3,14 +3,24 @@ import json
 import logging
 import threading
 import time
+from datetime import datetime, timedelta
 
 import paho.mqtt.client as mqtt
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [pentair_bridge] %(message)s",
+
+class LocalTimezoneFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        return datetime.fromtimestamp(record.created).astimezone().isoformat(
+            timespec="seconds"
+        )
+
+
+_handler = logging.StreamHandler()
+_handler.setFormatter(
+    LocalTimezoneFormatter("%(asctime)s %(levelname)s [pentair_bridge] %(message)s")
 )
+logging.basicConfig(level=logging.INFO, handlers=[_handler], force=True)
 logger = logging.getLogger("pentair_bridge")
 
 
@@ -44,33 +54,60 @@ SPEED3_RPM = int(OPTIONS.get("speed3_rpm", 2500))
 SPEED4_RPM = int(OPTIONS.get("speed4_rpm", OPTIONS.get("high_rpm", 3450)))
 DEFAULT_TARGET_RPM = 1650
 
-_raw_control_mode = OPTIONS.get("control_mode", "on_demand")
-if _raw_control_mode not in ("on_demand", "continuous"):
-    logger.warning(
-        "Invalid control_mode %r; falling back to 'on_demand'", _raw_control_mode
-    )
-    _raw_control_mode = "on_demand"
-CONTROL_MODE = _raw_control_mode
+CONTROL_MODE = "on_demand"
 
 CONTROL_RELEASE_SECONDS = int(OPTIONS.get("control_release_seconds", 60))
 MIN_COMMAND_INTERVAL_SECONDS = float(OPTIONS.get("min_command_interval_seconds", 1.0))
 DEDUPE_WINDOW_SECONDS = 2.0
 
-_raw_poll_mode = OPTIONS.get("status_poll_mode", "active").lower()
-if _raw_poll_mode not in ("active", "passive"):
-    logger.warning(
-        "Invalid status_poll_mode %r; falling back to 'active'", _raw_poll_mode
-    )
-    _raw_poll_mode = "active"
-STATUS_POLL_MODE = _raw_poll_mode
+ACTIVE_POLL_TIMEOUT_SECONDS = 5.0
+CONTINUOUS_POLL_INTERVAL_SECONDS = 1.0
 
-# status_poll_interval_seconds overrides the older status_poll_interval if provided
-STATUS_POLL_INTERVAL = float(
-    OPTIONS.get(
-        "status_poll_interval_seconds",
-        OPTIONS.get("status_poll_interval", 900),
-    )
+
+def _warn_deprecated_option(option_name: str, message: str):
+    if option_name in OPTIONS:
+        logger.warning("Option %r is deprecated and ignored: %s", option_name, message)
+
+
+def _load_poll_interval_minutes() -> float:
+    raw_value = OPTIONS.get("poll_interval_minutes", 15)
+    try:
+        poll_interval_minutes = float(raw_value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid poll_interval_minutes %r; falling back to default 15", raw_value
+        )
+        return 15.0
+
+    if poll_interval_minutes < 0:
+        logger.warning(
+            "Negative poll_interval_minutes %r is not supported; falling back to 15",
+            raw_value,
+        )
+        return 15.0
+
+    return poll_interval_minutes
+
+
+_warn_deprecated_option(
+    "control_mode",
+    "control mode is now fixed to 'on_demand'",
 )
+_warn_deprecated_option(
+    "status_poll_mode",
+    "polling now starts active for 5 seconds and then returns to passive automatically",
+)
+_warn_deprecated_option(
+    "status_poll_interval_seconds",
+    "use 'poll_interval_minutes' instead",
+)
+_warn_deprecated_option(
+    "status_poll_interval",
+    "use 'poll_interval_minutes' instead",
+)
+
+POLL_INTERVAL_MINUTES = _load_poll_interval_minutes()
+POLL_INTERVAL_SECONDS = POLL_INTERVAL_MINUTES * 60.0
 
 # --- Cleaning mode ---
 # When enabled, active polling is suspended so humans can operate the physical
@@ -94,6 +131,11 @@ _hold_until: float = 0.0  # epoch second when hold window expires
 
 # --- immediate-poll event: set to trigger a poll without waiting for the interval ---
 _poll_now_event = threading.Event()
+_poll_state_lock = threading.Lock()
+_active_poll_until: float = 0.0
+_next_poll_due: float = 0.0
+_last_poll_epoch: int | None = None
+_last_poll_local: str | None = None
 
 
 def hex_dump(data: bytes) -> str:
@@ -244,7 +286,7 @@ def device_block():
         "name": DEVICE_NAME,
         "manufacturer": "Pentair",
         "model": "MQTT RS-485 Bridge",
-        "sw_version": "0.4.0",
+        "sw_version": "0.5.0",
     }
 
 
@@ -288,6 +330,23 @@ def publish_discovery(client):
             "name": "Pump Drive State",
             "state_topic": f"{PARSED_BASE}/drive_state",
             "icon": "mdi:engine",
+        },
+        "sensor_last_poll_local": {
+            "component": "sensor",
+            "object_id": "last_poll_local",
+            "name": "Pump Last Poll",
+            "state_topic": f"{PARSED_BASE}/last_poll_local",
+            "device_class": "timestamp",
+            "entity_category": "diagnostic",
+            "icon": "mdi:clock-check-outline",
+        },
+        "sensor_last_poll_epoch": {
+            "component": "sensor",
+            "object_id": "last_poll_epoch",
+            "name": "Pump Last Poll Epoch",
+            "state_topic": f"{PARSED_BASE}/last_poll_epoch",
+            "entity_category": "diagnostic",
+            "icon": "mdi:counter",
         },
         # Schedule enabled – read-only binary sensor derived from run-byte bit 2
         "binary_sensor_schedule_enabled": {
@@ -434,9 +493,51 @@ def publish_cleaning_mode_state(client):
     logger.info("Cleaning mode state published: %s", "ON" if state else "OFF")
 
 
+def local_now() -> datetime:
+    return datetime.now().astimezone()
+
+
+def format_utc_offset(offset: timedelta | None) -> str:
+    if offset is None:
+        return "UTC+00:00"
+
+    total_seconds = int(offset.total_seconds())
+    sign = "+" if total_seconds >= 0 else "-"
+    total_seconds = abs(total_seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes = remainder // 60
+    return f"UTC{sign}{hours:02d}:{minutes:02d}"
+
+
+def publish_last_poll_state(client, when: datetime | None = None):
+    global _last_poll_epoch, _last_poll_local
+
+    if when is None:
+        when = local_now()
+
+    with _poll_state_lock:
+        _last_poll_epoch = int(when.timestamp())
+        _last_poll_local = when.isoformat(timespec="seconds")
+        last_poll_epoch = _last_poll_epoch
+        last_poll_local = _last_poll_local
+
+    client.publish(f"{PARSED_BASE}/last_poll_epoch", str(last_poll_epoch), retain=True)
+    client.publish(f"{PARSED_BASE}/last_poll_local", last_poll_local, retain=True)
+    logger.info(
+        "Poll refresh telemetry published epoch=%s local=%s",
+        last_poll_epoch,
+        last_poll_local,
+    )
+
+
 def publish_parsed_status(client, packet, status):
+    with _poll_state_lock:
+        last_poll_epoch = _last_poll_epoch
+        last_poll_local = _last_poll_local
+
     payload = {
         "timestamp": int(time.time()),
+        "timestamp_local": local_now().isoformat(timespec="seconds"),
         "source": f"0x{packet['src']:02X}",
         "destination": f"0x{packet['dest']:02X}",
         "action": f"0x{packet['action']:02X}",
@@ -458,6 +559,8 @@ def publish_parsed_status(client, packet, status):
             "hours": status["clock_hours"],
             "minutes": status["clock_minutes"],
         },
+        "last_poll_epoch": last_poll_epoch,
+        "last_poll_local": last_poll_local,
         "raw_data_hex": status["raw_data_hex"],
         "raw_packet_hex": hex_dump(packet["raw"]),
     }
@@ -530,6 +633,11 @@ def publish_frame(client, frame: bytes, label: str):
     logger.info("TX %s %s mid=%s", label, hex_dump(frame), info.mid)
 
 
+def publish_status_request(client, label: str):
+    publish_frame(client, build_status_request(), label)
+    publish_last_poll_state(client)
+
+
 def _cmd_fingerprint(frame: bytes) -> str:
     return hashlib.sha1(frame).hexdigest()
 
@@ -585,7 +693,7 @@ def handle_command(client, topic, payload_text):
     payload_text = payload_text.strip()
 
     if topic == f"{CMD_BASE}/status":
-        publish_frame(client, build_status_request(), "CMD STATUS")
+        publish_status_request(client, "CMD STATUS")
         return
 
     if topic == f"{CMD_BASE}/off":
@@ -665,7 +773,7 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
     # Publish cleaning mode state on every (re)connect so HA is in sync
     publish_cleaning_mode_state(client)
 
-    # Trigger an immediate status poll on connect/reconnect
+    # Trigger an immediate active polling window on connect/reconnect
     _poll_now_event.set()
 
 
@@ -734,34 +842,54 @@ def mqtt_listener():
 _hold_logged_expired = False
 
 
-def autopoll_loop():
-    global _hold_logged_expired
+def activate_polling_window(reason: str, *, immediate: bool):
+    global _active_poll_until, _next_poll_due
+
+    now = time.monotonic()
+    with _poll_state_lock:
+        _active_poll_until = max(_active_poll_until, now + ACTIVE_POLL_TIMEOUT_SECONDS)
+        if immediate or _next_poll_due <= 0:
+            _next_poll_due = now
     logger.info(
-        "Auto-poll loop started (interval=%.0fs, cleaning_mode=%s)",
-        STATUS_POLL_INTERVAL,
+        "Polling ACTIVE for %.0fs (%s)",
+        ACTIVE_POLL_TIMEOUT_SECONDS,
+        reason,
+    )
+
+
+def autopoll_loop():
+    global _hold_logged_expired, _active_poll_until, _next_poll_due
+    logger.info(
+        "Auto-poll loop started (cadence=%s, active_window=%.0fs, cleaning_mode=%s)",
+        (
+            "continuous"
+            if POLL_INTERVAL_SECONDS == 0
+            else f"{POLL_INTERVAL_SECONDS:.0f}s"
+        ),
+        ACTIVE_POLL_TIMEOUT_SECONDS,
         _cleaning_mode,
     )
+    activate_polling_window("startup", immediate=True)
+    poll_state = None
+    pending_immediate = True
     while not stop_event.is_set():
-        # Wait for the poll interval OR an immediate-poll signal (whichever comes first).
-        # _poll_now_event.wait() does not respond to stop_event, so we cap it at 1 s
-        # slices and re-check the stop flag, ensuring clean shutdown without
-        # waiting a full STATUS_POLL_INTERVAL.
-        deadline = time.monotonic() + STATUS_POLL_INTERVAL
-        while not stop_event.is_set():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            triggered = _poll_now_event.wait(timeout=min(remaining, 1.0))
-            if triggered:
-                break
+        if pending_immediate:
+            refresh_requested = False
+            pending_immediate = False
+        else:
+            refresh_requested = _poll_now_event.wait(timeout=1.0)
 
-        _poll_now_event.clear()
+        if refresh_requested:
+            _poll_now_event.clear()
 
         if stop_event.is_set():
             break
 
         if command_client is None:
             continue
+
+        if refresh_requested:
+            activate_polling_window("immediate refresh request", immediate=True)
 
         # Respect cleaning mode – skip the poll but keep the loop alive
         with _cleaning_mode_lock:
@@ -772,8 +900,9 @@ def autopoll_loop():
             )
             continue
 
+        now = time.monotonic()
+
         if CONTROL_MODE == "on_demand":
-            now = time.monotonic()
             with _control_lock:
                 hold_until = _hold_until
                 logged = _hold_logged_expired
@@ -786,9 +915,32 @@ def autopoll_loop():
             elif now < hold_until:
                 with _control_lock:
                     _hold_logged_expired = False
+        with _poll_state_lock:
+            if POLL_INTERVAL_SECONDS > 0 and _next_poll_due > 0 and now >= _next_poll_due:
+                _active_poll_until = max(
+                    _active_poll_until,
+                    now + ACTIVE_POLL_TIMEOUT_SECONDS,
+                )
+
+            polling_active = now < _active_poll_until
+            poll_due = _next_poll_due <= 0 or now >= _next_poll_due
+
+        current_state = "ACTIVE" if polling_active else "PASSIVE"
+        if current_state != poll_state:
+            logger.info("Polling mode switched to %s", current_state)
+            poll_state = current_state
+
+        if not polling_active or not poll_due:
+            continue
 
         logger.info("AUTO POLL sending status request")
-        publish_frame(command_client, build_status_request(), "AUTO STATUS")
+        publish_status_request(command_client, "AUTO STATUS")
+
+        with _poll_state_lock:
+            if POLL_INTERVAL_SECONDS == 0:
+                _next_poll_due = time.monotonic() + CONTINUOUS_POLL_INTERVAL_SECONDS
+            else:
+                _next_poll_due = time.monotonic() + POLL_INTERVAL_SECONDS
 
 
 def main():
@@ -799,13 +951,25 @@ def main():
         raise RuntimeError("broker is required in add-on configuration")
 
     logger.info("Starting Pentair bridge with broker=%s port=%s", BROKER, PORT)
+    tz_now = local_now()
+    logger.info(
+        "Detected local timezone: %s (%s); current local time=%s",
+        tz_now.tzname() or "local",
+        format_utc_offset(tz_now.utcoffset()),
+        tz_now.isoformat(timespec="seconds"),
+    )
     logger.info(
         "Control mode: %s (release=%ds, min_interval=%.2fs)",
         CONTROL_MODE, CONTROL_RELEASE_SECONDS, MIN_COMMAND_INTERVAL_SECONDS,
     )
     logger.info(
-        "Status poll mode: %s (interval=%.0fs)",
-        STATUS_POLL_MODE, STATUS_POLL_INTERVAL,
+        "Polling behavior: startup ACTIVE for %.0fs, then PASSIVE; cadence=%s",
+        ACTIVE_POLL_TIMEOUT_SECONDS,
+        (
+            "continuous while active"
+            if POLL_INTERVAL_SECONDS == 0
+            else f"{POLL_INTERVAL_MINUTES:.0f} minute(s)"
+        ),
     )
     logger.info("Cleaning mode on startup: %s", "ENABLED" if _cleaning_mode else "DISABLED")
 
@@ -822,14 +986,8 @@ def main():
     listener_publish_client = client
     command_client = client
 
-    if STATUS_POLL_MODE == "passive":
-        logger.info(
-            "Status poll mode: passive — active AUTO STATUS polling disabled; "
-            "telemetry updates from incoming uplink frames only."
-        )
-    else:
-        poll_thread = threading.Thread(target=autopoll_loop, daemon=True)
-        poll_thread.start()
+    poll_thread = threading.Thread(target=autopoll_loop, daemon=True)
+    poll_thread.start()
 
     while not stop_event.is_set():
         time.sleep(1)
