@@ -40,6 +40,7 @@ PUMP_ADDR = int(OPTIONS.get("pump_addr", 96))
 
 LOW_RPM = int(OPTIONS.get("low_rpm", 1650))
 HIGH_RPM = int(OPTIONS.get("high_rpm", 3000))
+DEFAULT_TARGET_RPM = 1650
 
 _raw_control_mode = OPTIONS.get("control_mode", "on_demand")
 if _raw_control_mode not in ("on_demand", "continuous"):
@@ -263,6 +264,7 @@ def publish_discovery(client):
             "name": "Pump Target RPM",
             "command_topic": f"{CMD_BASE}/rpm",
             "state_topic": f"{PARSED_BASE}/rpm",
+            "initial": DEFAULT_TARGET_RPM,
             "min": 450,
             "max": 3450,
             "step": 10,
