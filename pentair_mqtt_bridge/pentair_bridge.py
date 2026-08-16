@@ -137,6 +137,81 @@ _next_poll_due: float = 0.0
 _last_poll_epoch: int | None = None
 _last_poll_local: str | None = None
 
+# --- Energy accumulator ---
+# Cumulative kWh computed by integrating watt samples over time.
+# Persisted across restarts via a small JSON file in /data.
+_ENERGY_PERSIST_PATH = "/data/energy_kwh.json"
+_energy_lock = threading.Lock()
+_energy_kwh: float = 0.0
+_energy_last_sample_time: float | None = None  # monotonic clock
+
+
+def _load_energy_kwh() -> float:
+    """Load persisted cumulative kWh from /data, returning 0.0 on any error."""
+    try:
+        with open(_ENERGY_PERSIST_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        value = float(data.get("energy_kwh", 0.0))
+        if value < 0:
+            return 0.0
+        return value
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return 0.0
+
+
+def _save_energy_kwh(value: float) -> None:
+    """Persist cumulative kWh to /data (best-effort; never raises)."""
+    try:
+        with open(_ENERGY_PERSIST_PATH, "w", encoding="utf-8") as f:
+            json.dump({"energy_kwh": value}, f)
+    except OSError:
+        pass
+
+
+def _accumulate_energy(watts: float | None) -> float:
+    """Integrate a new watt sample into the cumulative kWh counter.
+
+    Uses wall-clock monotonic time to compute the time delta since the last
+    sample.  Negative deltas, zero deltas, and invalid watt values are silently
+    ignored so the accumulator stays monotonic (required for
+    state_class: total_increasing).
+
+    Returns the updated cumulative kWh value.
+    """
+    global _energy_kwh, _energy_last_sample_time
+
+    now = time.monotonic()
+
+    with _energy_lock:
+        if watts is None or watts < 0:
+            # Invalid sample – update timestamp so next delta starts fresh
+            _energy_last_sample_time = now
+            return _energy_kwh
+
+        if _energy_last_sample_time is None:
+            # First sample; initialise timestamp without accumulating
+            _energy_last_sample_time = now
+            return _energy_kwh
+
+        delta_seconds = now - _energy_last_sample_time
+        if delta_seconds <= 0:
+            # Duplicate or out-of-order call; skip
+            return _energy_kwh
+
+        delta_hours = delta_seconds / 3600.0
+        delta_kwh = (watts * delta_hours) / 1000.0
+
+        if delta_kwh < 0:
+            # Guard: should not happen given watts >= 0 and delta > 0
+            _energy_last_sample_time = now
+            return _energy_kwh
+
+        _energy_kwh += delta_kwh
+        _energy_last_sample_time = now
+
+        _save_energy_kwh(_energy_kwh)
+        return _energy_kwh
+
 
 def hex_dump(data: bytes) -> str:
     return " ".join(f"{b:02X}" for b in data)
@@ -286,7 +361,7 @@ def device_block():
         "name": DEVICE_NAME,
         "manufacturer": "Pentair",
         "model": "MQTT RS-485 Bridge",
-        "sw_version": "0.5.0",
+        "sw_version": "0.6.0",
     }
 
 
@@ -309,6 +384,16 @@ def publish_discovery(client):
             "device_class": "power",
             "state_class": "measurement",
             "icon": "mdi:flash",
+        },
+        "sensor_energy_kwh": {
+            "component": "sensor",
+            "object_id": "energy_kwh",
+            "name": "Pump Energy",
+            "state_topic": f"{PARSED_BASE}/energy_kwh",
+            "unit_of_measurement": "kWh",
+            "device_class": "energy",
+            "state_class": "total_increasing",
+            "icon": "mdi:lightning-bolt",
         },
         "sensor_run": {
             "component": "sensor",
@@ -535,6 +620,12 @@ def publish_parsed_status(client, packet, status):
         last_poll_epoch = _last_poll_epoch
         last_poll_local = _last_poll_local
 
+    # Accumulate cumulative energy before building the JSON payload so it is
+    # included in the /json topic together with all other status fields.
+    energy_kwh = _accumulate_energy(
+        float(status["watts"]) if status["watts"] is not None else None
+    )
+
     payload = {
         "timestamp": int(time.time()),
         "timestamp_local": local_now().isoformat(timespec="seconds"),
@@ -549,6 +640,7 @@ def publish_parsed_status(client, packet, status):
         "drive_state": status["drive_state"],
         "drive_state_label": status["drive_state_label"],
         "watts": status["watts"],
+        "energy_kwh": round(energy_kwh, 6),
         "rpm": status["rpm"],
         "schedule_enabled": status["schedule_enabled"],
         "timer": {
@@ -568,6 +660,7 @@ def publish_parsed_status(client, packet, status):
     client.publish(f"{PARSED_BASE}/json", json.dumps(payload), retain=True)
     client.publish(f"{PARSED_BASE}/rpm", str(status["rpm"]), retain=True)
     client.publish(f"{PARSED_BASE}/watts", str(status["watts"]), retain=True)
+    client.publish(f"{PARSED_BASE}/energy_kwh", f"{energy_kwh:.6f}", retain=True)
     client.publish(f"{PARSED_BASE}/run", str(status["run"]), retain=True)
     client.publish(f"{PARSED_BASE}/mode", status["mode_label"] or str(status["mode"]), retain=True)
     client.publish(f"{PARSED_BASE}/drive_state", status["drive_state_label"] or str(status["drive_state"]), retain=True)
@@ -946,10 +1039,15 @@ def autopoll_loop():
 def main():
     global listener_publish_client
     global command_client
+    global _energy_kwh
 
     if not BROKER:
         raise RuntimeError("broker is required in add-on configuration")
 
+    loaded_kwh = _load_energy_kwh()
+    with _energy_lock:
+        _energy_kwh = loaded_kwh
+    logger.info("Loaded persisted cumulative energy: %.6f kWh", loaded_kwh)
     logger.info("Starting Pentair bridge with broker=%s port=%s", BROKER, PORT)
     tz_now = local_now()
     logger.info(

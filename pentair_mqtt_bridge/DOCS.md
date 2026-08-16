@@ -246,6 +246,7 @@ The add-on publishes decoded pump data to these topics:
 - `pentair/pump/status/cleaning_mode` — `ON` or `OFF`; current polling state
 - `pentair/pump/status/last_poll_epoch` — Unix epoch seconds for the latest active poll refresh
 - `pentair/pump/status/last_poll_local` — local timezone ISO-8601 timestamp for the latest active poll refresh
+- `pentair/pump/status/energy_kwh` — cumulative energy consumed in kWh (monotonically increasing)
 
 #### Speed preset topics
 
@@ -259,6 +260,18 @@ When the pump is running on a numbered speed preset (Speed 1–4 buttons), the a
 These topics are updated only when the pump reports operating on the corresponding speed slot. They retain their last published value so HA always has a reference for each configured speed.
 
 If you change `parsed_base`, all topic paths above will change accordingly.
+
+#### Energy sensor
+
+The add-on publishes a cumulative energy sensor that integrates the reported watt values over time:
+
+- **MQTT topic:** `pentair/pump/status/energy_kwh`
+- **Unit:** `kWh`
+- **HA discovery:** `device_class: energy`, `state_class: total_increasing`
+
+This sensor can be added to the **Home Assistant Energy Dashboard** under **Device energy consumption**. The value is monotonically increasing and is persisted in `/data/energy_kwh.json` so it survives add-on restarts.
+
+The existing **Pump Power** sensor (`pentair/pump/status/watts`, unit `W`) remains available for **Device power consumption** in the Energy Dashboard.
 
 #### Last poll telemetry sensors
 
