@@ -47,9 +47,7 @@ speed1_rpm: 1650
 speed2_rpm: 2000
 speed3_rpm: 2500
 speed4_rpm: 3450
-status_poll_interval_seconds: 900
-status_poll_mode: active
-control_mode: on_demand
+poll_interval_minutes: 15
 control_release_seconds: 60
 min_command_interval_seconds: 1.0
 cleaning_mode: false
@@ -134,35 +132,31 @@ Default: `3450`
 #### `low_rpm` / `high_rpm`
 Legacy RPM values kept for backward compatibility with the `cmd_base/low` and `cmd_base/high` topics. New installs should use `speed1_rpm`–`speed4_rpm` instead.
 
-#### `status_poll_interval_seconds`
-How often the add-on polls the pump for status when `status_poll_mode` is `active`, in seconds.
+#### `poll_interval_minutes`
+How often the add-on schedules an active poll refresh window, in minutes.
 
-Default: `900` (15 minutes)
+Default: `15`
+
+- `15` = check the pump every 15 minutes
+- `0` = continuous polling while an active polling window is running
+
+Each active poll refresh window lasts 5 seconds and then the bridge automatically returns to passive mode.
 
 > **Panel lock tip:** Polling too frequently causes the pump display to show **"Display Not Active"** and prevents manual keypad operation. The default 15-minute interval is a good balance. Use **cleaning mode** during manual maintenance sessions to suspend polling entirely.
 
 ---
 
-## Control mode options
+## Control behavior
 
-### `control_mode`
+Control mode is no longer configurable. The bridge always uses **on-demand** control behavior.
 
-Controls how the bridge behaves after sending a command to the pump.
-
-| Value | Behavior |
-|---|---|
-| `on_demand` | **(default, recommended)** After a command is sent, the bridge holds control for `control_release_seconds`, then stops reasserting and returns to read-only polling. This allows the local Pentair keypad to resume control after the hold window expires. |
-| `continuous` | The bridge continuously reasserts control (original behavior). |
-
-If an invalid value is supplied, the bridge falls back to `on_demand` and logs a warning.
+After a command is sent, the bridge holds control for `control_release_seconds`, then stops reasserting and returns to read-only behavior. This keeps local Pentair keypad control available once the hold window expires.
 
 ### `control_release_seconds`
 
 How many seconds after a control command is sent before the bridge releases control and returns to read-only polling.
 
 Default: `60`
-
-Only applies when `control_mode` is `on_demand`.
 
 ### `min_command_interval_seconds`
 
@@ -172,32 +166,21 @@ Default: `1.0`
 
 ---
 
-## Status polling options
+## Status polling behavior
 
-### `status_poll_mode`
+Polling mode is no longer configurable. The bridge now behaves as follows:
 
-Controls whether the bridge actively sends AUTO STATUS requests to the pump.
-
-| Value | Behavior |
-|---|---|
-| `active` | **(default)** Sends a Pentair AUTO STATUS frame to the pump every `status_poll_interval_seconds`. This is the original behavior. |
-| `passive` | **Never** sends AUTO STATUS frames. Telemetry is published only when the pump sends uplink RS-485 frames that arrive on the `topic_up` MQTT topic. |
+- Starts in **ACTIVE** mode for the first **5 seconds** after startup
+- Returns to **PASSIVE** mode automatically after that window closes
+- Re-enters a short active refresh window on reconnect and when cleaning mode is disabled
+- Uses `poll_interval_minutes` to determine how often a new active refresh window is scheduled
+- Does **not** transmit AUTO STATUS poll frames while passive
 
 > **Keypad usability note:** Some Pentair pump firmware versions treat any RS-485 frame sent by an external controller — including the AUTO STATUS poll — as evidence of an active automation system. This causes the local keypad to display **"Display Not Active"** and prevents manual keypad operation while the integration is running.
 >
-> If you experience this, either set `status_poll_mode: passive` or use **cleaning mode** (see below) during maintenance periods. In passive mode the bridge never transmits status requests; the local keypad remains usable at all times, and telemetry is still published to Home Assistant whenever the pump sends its own periodic uplink status frames.
+> The add-on now defaults to passive behavior outside of short refresh windows, so the keypad remains usable most of the time. Use **cleaning mode** (see below) during maintenance periods if you want the bridge to stay fully silent.
 >
 > **Trade-off:** In passive mode, telemetry updates depend on the pump generating its own bus traffic. If the pump is idle and produces no uplink frames, telemetry will not update until the pump sends a frame on its own or a remote command is sent.
-
-If an invalid value is supplied, the bridge falls back to `active` and logs a warning.
-
-### `status_poll_interval_seconds`
-
-How often (in seconds) the bridge sends an AUTO STATUS poll to the pump when `status_poll_mode` is `active`.
-
-Default: `900` (15 minutes)
-
-Has no effect when `status_poll_mode` is `passive`.
 
 ---
 
@@ -261,6 +244,8 @@ The add-on publishes decoded pump data to these topics:
 - `pentair/pump/status/clock`
 - `pentair/pump/status/schedule_enabled` — `ON` or `OFF`; derived from the run-byte schedule flag
 - `pentair/pump/status/cleaning_mode` — `ON` or `OFF`; current polling state
+- `pentair/pump/status/last_poll_epoch` — Unix epoch seconds for the latest active poll refresh
+- `pentair/pump/status/last_poll_local` — local timezone ISO-8601 timestamp for the latest active poll refresh
 
 #### Speed preset topics
 
@@ -274,6 +259,17 @@ When the pump is running on a numbered speed preset (Speed 1–4 buttons), the a
 These topics are updated only when the pump reports operating on the corresponding speed slot. They retain their last published value so HA always has a reference for each configured speed.
 
 If you change `parsed_base`, all topic paths above will change accordingly.
+
+#### Last poll telemetry sensors
+
+When MQTT discovery is enabled, Home Assistant gets:
+
+- a diagnostic timestamp sensor for `last_poll_local`
+- a diagnostic sensor for `last_poll_epoch`
+
+These update whenever the bridge sends an active poll refresh.
+
+Add-on log timestamps also use the detected local timezone, and startup logs include the timezone / UTC offset for verification.
 
 ### Command topics
 
@@ -378,6 +374,17 @@ This value is derived from bit 2 of the run byte in the pump status response. It
 ---
 
 ## Troubleshooting
+
+### Deprecated polling options still appear in my stored config
+
+Older stored configurations may still contain:
+
+- `control_mode`
+- `status_poll_mode`
+- `status_poll_interval_seconds`
+- `status_poll_interval`
+
+The add-on accepts those keys for backward compatibility, logs that they are deprecated, and ignores them. Use `poll_interval_minutes` going forward.
 
 ### Add-on starts but no status data appears
 Check:

@@ -6,13 +6,14 @@ A Home Assistant custom add-on that bridges a Pentair IntelliFlo/RS-485 pool pum
 
 - Connects to an MQTT broker
 - Sends Pentair RS-485 frames over MQTT transport topics
-- Polls pump status automatically (immediate poll on startup and reconnect)
+- Polls pump status automatically with an active startup refresh window, then passive monitoring
 - Decodes status responses
 - Publishes parsed values back to MQTT as JSON and scalar topics
 - Accepts MQTT command topics for pump control
 - **Cleaning mode** — pause polling so the physical panel is freely usable during maintenance
 - **Schedule enabled** — read-only sensor showing whether the pump's internal schedule is active
 - **Speed 1–4 preset visibility** — publishes the RPM configured for each speed button
+- **Last poll telemetry** — publishes the last active poll refresh time as local ISO-8601 and Unix epoch
 - Designed for Home Assistant as a custom add-on
 
 ## Repository structure
@@ -61,9 +62,7 @@ ctrl_addr: 33
 pump_addr: 96
 low_rpm: 1650
 high_rpm: 3000
-status_poll_interval_seconds: 30
-status_poll_mode: active
-control_mode: on_demand
+poll_interval_minutes: 15
 control_release_seconds: 60
 min_command_interval_seconds: 1.0
 cleaning_mode: false
@@ -88,6 +87,8 @@ These are configurable in the add-on options.
 - `pentair/pump/status/clock`
 - `pentair/pump/status/schedule_enabled` — `ON`/`OFF`
 - `pentair/pump/status/cleaning_mode` — `ON`/`OFF`
+- `pentair/pump/status/last_poll_epoch`
+- `pentair/pump/status/last_poll_local`
 - `pentair/pump/status/speed/1/rpm` through `pentair/pump/status/speed/4/rpm`
 
 ### Command topics
@@ -102,21 +103,23 @@ Example:
 - publish `2200` to `pentair/pump/cmd/rpm`
 - publish `ON` to `pentair/pump/cmd/set/cleaning_mode` to suspend polling
 
-## Control modes
+## Polling behavior
 
-| Option | Description |
-|---|---|
-| `control_mode: on_demand` | **(default)** After a remote command, hold control for `control_release_seconds` then go read-only. Preserves local keypad usability. |
-| `control_mode: continuous` | Always reassert control (original behavior). |
+- Control mode is always **on-demand**. After a remote command, the bridge holds control for `control_release_seconds` and then returns to read-only behavior so the local keypad becomes usable again.
+- Polling starts in **ACTIVE** mode for the first **5 seconds** after startup or an immediate refresh trigger (for example reconnect or cleaning mode being disabled), then returns to **PASSIVE** mode automatically.
+- `poll_interval_minutes` is the only polling cadence setting:
+  - `15` by default
+  - `0` means continuous polling **while the bridge is in an active polling window**
+- During passive mode, the bridge does **not** transmit AUTO STATUS poll frames.
 
-## Status poll modes
+> **Local keypad tip:** Some Pentair pump firmware versions lock the keypad and show **"Display Not Active"** whenever any RS-485 frame is transmitted by an external device. The add-on now minimizes that by using a short active refresh window and passive monitoring the rest of the time. Use **Cleaning Mode** during manual maintenance sessions to keep the bus silent.
 
-| Option | Description |
-|---|---|
-| `status_poll_mode: active` | **(default)** Sends an AUTO STATUS frame every `status_poll_interval_seconds`. Provides regular telemetry updates. |
-| `status_poll_mode: passive` | Never sends AUTO STATUS frames. Telemetry updates from uplink frames only. **Preserves local keypad on pumps that lock the display when polled.** |
+## Last poll telemetry
 
-> **Local keypad tip:** Some Pentair pump firmware versions lock the keypad and show **"Display Not Active"** whenever any RS-485 frame is transmitted by an external device — including routine status polls. If your keypad is locked while the integration is running, set `status_poll_mode: passive` or use **Cleaning Mode** during manual maintenance sessions. For normal operation with less frequent polling, set `status_poll_interval_seconds: 900` (15-minute intervals).
+- `pentair/pump/status/last_poll_epoch` — Unix epoch seconds for the most recent active poll refresh
+- `pentair/pump/status/last_poll_local` — local timezone ISO-8601 timestamp, for example `2026-08-16T14:22:31-04:00`
+- When MQTT discovery is enabled, Home Assistant gets diagnostic sensors for both values, including a timestamp sensor for `last_poll_local`
+- Add-on log timestamps now use the detected local timezone, and startup logs include the timezone / UTC offset for quick verification
 
 ## Cleaning mode
 
@@ -127,6 +130,12 @@ Enable Cleaning Mode to pause all polling and keep the physical pump panel free 
 - HA entity: **Cleaning Mode** switch (via MQTT discovery)
 
 When disabled, the bridge immediately polls for fresh status.
+
+## Migration notes
+
+- Removed user-facing options: `control_mode`, `status_poll_mode`, `status_poll_interval_seconds`, and legacy `status_poll_interval`
+- Existing stored configs that still contain those keys are accepted, but the add-on logs a warning and ignores them
+- Use `poll_interval_minutes` instead for polling cadence
 
 See `DOCS.md` in the add-on for full option descriptions.
 
